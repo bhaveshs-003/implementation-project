@@ -10,6 +10,7 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -66,13 +67,21 @@ export default function Login() {
               <input
                 id="login-password"
                 className="input"
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••••"
                 required
                 autoComplete="current-password"
               />
+              <button
+                type="button"
+                className="input-group-btn"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+                <Icon name={showPassword ? 'eyeOff' : 'eye'} />
+              </button>
             </div>
           </div>
           <button type="submit" className="btn btn-primary btn-lg btn-block mt-8" disabled={loading}>

@@ -268,6 +268,11 @@ h1, h2, h3, h4 { letter-spacing: -0.015em; color: var(--text); }
 .input-group { position: relative; }
 .input-group > svg { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; color: var(--text-3); pointer-events: none; }
 .input-group > .input { padding-left: 34px; }
+.input-group > .input-group-btn ~ .input,
+.input-group:has(.input-group-btn) > .input { padding-right: 36px; }
+.input-group-btn { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; padding: 2px; cursor: pointer; color: var(--text-3); display: flex; align-items: center; justify-content: center; border-radius: 4px; }
+.input-group-btn:hover { color: var(--text-1); background: var(--bg-2); }
+.input-group-btn svg { width: 16px; height: 16px; }
 
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
 .form-section-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-3); margin: 8px 0 10px; }
