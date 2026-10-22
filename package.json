@@ -1,0 +1,19 @@
+{
+  "name": "functional-tool",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "migrate": "cd api && node scripts/migrate.js",
+    "seed": "cd api && node scripts/seed.js",
+    "setup:storage": "cd api && node scripts/setup-storage.js",
+    "doctor": "cd api && node scripts/doctor.js",
+    "test": "vitest run --reporter=verbose"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "pg": "^8.23.1",
+    "playwright": "^1.49.1",
+    "supertest": "^7.0.0",
+    "vitest": "^2.1.8"
+  }
+}

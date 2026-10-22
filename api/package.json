@@ -1,0 +1,25 @@
+{
+  "name": "functional-tool-api",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "node --env-file .env --watch src/app.js",
+    "migrate": "node --env-file .env scripts/migrate.js",
+    "seed": "node --env-file .env scripts/seed.js",
+    "setup:storage": "node --env-file .env scripts/setup-storage.js",
+    "doctor": "node --env-file .env scripts/doctor.js",
+    "test": "node --experimental-vm-modules ../node_modules/.bin/vitest run --reporter=verbose"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "jose": "^5.9.6",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": ">=20.6"
+  }
+}

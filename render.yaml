@@ -1,0 +1,53 @@
+# Free-tier setup: Render free web service (API) + Render static site (frontend).
+# Scheduled jobs (cleanup cron + keep-alive) run from .github/workflows/scheduled.yml,
+# because Render cron jobs and pre-deploy commands are paid features.
+services:
+  - type: web
+    name: functional-tool-api
+    runtime: node
+    plan: free
+    rootDir: api
+    # Migrations are tracked in _migrations, so re-running them on each build is safe.
+    # A failed migration fails the build, so a broken schema never goes live.
+    buildCommand: npm ci && node scripts/migrate.js
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: CRON_SECRET
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+
+  - type: web
+    name: functional-tool-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin

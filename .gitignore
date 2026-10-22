@@ -1,0 +1,13 @@
+node_modules/
+dist/
+
+# Secrets: set these in the hosting dashboard, never commit them
+.env
+.env.*
+!.env.example
+
+.backup-pre-redesign/
+test-results/
+playwright-report/
+*.log
+.DS_Store
