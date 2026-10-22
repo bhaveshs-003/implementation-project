@@ -1,7 +1,12 @@
-const API = import.meta.env.VITE_API_URL || '';
+import { supabase } from './supabase.js';
 
 export async function apiFetch(path, options = {}) {
   const { body, headers: extraHeaders = {}, ...rest } = options;
+
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session?.access_token) {
+    document.cookie = `access_token=${session.access_token}; path=/; SameSite=Lax; Secure`;
+  }
 
   const headers = { ...extraHeaders };
   let finalBody = body;
@@ -13,7 +18,7 @@ export async function apiFetch(path, options = {}) {
 
   let res;
   try {
-    res = await fetch(`${API}${path}`, {
+    res = await fetch(path, {
       credentials: 'include',
       headers,
       body: finalBody,

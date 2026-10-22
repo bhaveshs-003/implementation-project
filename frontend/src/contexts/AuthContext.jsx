@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { supabase } from '../lib/supabase.js';
+import { apiFetch } from '../lib/api.js';
 
 const AuthContext = createContext(null);
 
@@ -9,9 +9,8 @@ export function AuthProvider({ children }) {
 
   const refreshMe = useCallback(async () => {
     try {
-      const { data: { user }, error } = await supabase.auth.getUser();
-      if (error) throw error;
-      setPerson(user);
+      const data = await apiFetch('/api/auth/me');
+      setPerson(data.person);
     } catch {
       setPerson(null);
     } finally {
@@ -21,25 +20,20 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     refreshMe();
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setPerson(session?.user ?? null);
-      setLoading(false);
-    });
-
-    return () => subscription.unsubscribe();
   }, [refreshMe]);
 
   const signIn = useCallback(async (email, password) => {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) throw error;
-    setPerson(data.user);
+    const data = await apiFetch('/api/auth/signin', {
+      method: 'POST',
+      body: { email, password },
+    });
+    setPerson(data.person);
     return data;
   }, []);
 
   const signOut = useCallback(async () => {
     try {
-      await supabase.auth.signOut();
+      await apiFetch('/api/auth/signout', { method: 'POST' });
     } catch {
       // ignore errors on sign out
     }

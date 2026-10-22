@@ -6,5 +6,12 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: false,
+    proxy: {
+      '/api': {
+        target: 'https://functional-tool-api.onrender.com',
+        changeOrigin: true,
+        secure: true,
+      },
+    },
   },
 });
