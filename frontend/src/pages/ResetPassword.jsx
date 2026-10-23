@@ -48,7 +48,7 @@ export default function ResetPassword() {
     <div className="auth">
       <div className="card auth-card">
         <div className="auth-brand">
-          <span className="brand-mark">P</span> ProjectDelivery
+          <img src="/logo.png" alt="Mako IT Lab" className="brand-mark" /> ProjectDelivery
         </div>
         <h1 className="auth-title">Reset password</h1>
         <p className="auth-subtitle">Enter your new password below.</p>

@@ -514,13 +514,18 @@ h1, h2, h3, h4 { letter-spacing: -0.015em; color: var(--text); }
 
 /* ── Auth pages ────────────────────────────────────────────────────────────── */
 .auth {
-  min-height: 100vh; display: grid; place-items: center; padding: 24px;
-  background:
-    radial-gradient(900px 500px at 10% -10%, rgba(99, 102, 241, 0.16), transparent 60%),
-    radial-gradient(700px 500px at 110% 110%, rgba(124, 58, 237, 0.12), transparent 60%),
-    var(--bg);
+  min-height: 100vh; display: flex; align-items: center; justify-content: flex-start;
+  padding: 24px 24px 24px clamp(24px, 10vw, 160px);
+  background: #c7d2fe url('/login-bg.png') right center / cover no-repeat;
 }
-.auth-card { width: 100%; max-width: 400px; padding: 32px; animation: pd-dialog-in 0.25s var(--ease); }
+.auth-card {
+  width: 100%; max-width: 460px; padding: 40px; animation: pd-dialog-in 0.25s var(--ease);
+  background: rgba(255, 255, 255, 0.92); backdrop-filter: blur(8px);
+  box-shadow: 0 20px 50px rgba(30, 41, 99, 0.18);
+}
+@media (max-width: 720px) {
+  .auth { justify-content: center; padding: 24px; background-position: 75% center; }
+}
 .auth-brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; margin-bottom: 28px; }
 .auth-title { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 6px; }
 .auth-subtitle { color: var(--text-2); font-size: 14px; margin-bottom: 24px; }

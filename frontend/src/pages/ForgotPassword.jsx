@@ -28,7 +28,7 @@ export default function ForgotPassword() {
     <div className="auth">
       <div className="card auth-card">
         <div className="auth-brand">
-          <span className="brand-mark">P</span> ProjectDelivery
+          <img src="/logo.png" alt="Mako IT Lab" className="brand-mark" /> ProjectDelivery
         </div>
         <h1 className="auth-title">Forgot password</h1>
         <p className="auth-subtitle">Enter your email and we&apos;ll send a reset link.</p>
