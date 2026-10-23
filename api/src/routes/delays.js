@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { query } from '../db/pool.js';
 import { requireAuth } from '../middleware/auth.js';
 import { resolveProjectScope } from '../middleware/scope.js';
-import { canAcceptDelay, canDenyDelay, canReplyToDelay, auditLog } from '../rules/rules.js';
+import { canAcceptDelay, canDenyDelay, canReplyToDelay, canCloseDelay, auditLog } from '../rules/rules.js';
 
 const router = Router({ mergeParams: true });
 
@@ -279,6 +279,41 @@ router.post('/:delayId/reply', requireAuth, resolveProjectScope, async (req, res
     return res.status(201).json(message);
   } catch (err) {
     console.error('POST /:delayId/reply error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /:delayId/close  (admin only — force-accepts a denied thread)
+router.post('/:delayId/close', requireAuth, resolveProjectScope, async (req, res) => {
+  try {
+    const { projectId, delayId } = req.params;
+
+    const delay = await loadScopedDelay(delayId, projectId);
+    if (!delay) return res.status(404).json({ error: 'Delay not found' });
+
+    const ruleResult = canCloseDelay(delay, req.person);
+    if (!ruleResult.ok) return res.status(422).json({ error: ruleResult.reason });
+
+    await query(
+      "UPDATE delays SET status = 'accepted', decided_at = NOW(), decided_by = $1 WHERE id = $2",
+      [req.person.id, delayId]
+    );
+    await query(
+      "INSERT INTO delay_messages (delay_id, author_id, body, action) VALUES ($1, $2, 'Thread closed by admin.', 'accept')",
+      [delayId, req.person.id]
+    );
+    await auditLog({ query }, {
+      eventType: 'delay_closed',
+      entityType: 'delays',
+      entityId: delayId,
+      actorId: req.person.id,
+      actorRole: req.person.role,
+    });
+
+    const updated = await query('SELECT * FROM delays WHERE id = $1', [delayId]);
+    return res.json(updated.rows[0]);
+  } catch (err) {
+    console.error('POST /:delayId/close error:', err);
     return res.status(500).json({ error: 'Internal server error' });
   }
 });

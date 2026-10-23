@@ -48,10 +48,11 @@ function ProjectFormModal({ project, onSave, onClose }) {
     try {
       if (isEdit) {
         await apiFetch(`/api/projects/${project.id}`, { method: 'PUT', body: form });
+        onSave(null);
       } else {
-        await apiFetch('/api/projects', { method: 'POST', body: form });
+        const created = await apiFetch('/api/projects', { method: 'POST', body: form });
+        onSave(created);
       }
-      onSave();
     } catch (err) {
       setError(err.error || 'Save failed.');
     } finally {
@@ -222,6 +223,16 @@ export default function Projects() {
     fetchProjects(query);
   }, []);
 
+  useEffect(() => {
+    const onFocus = () => { if (document.visibilityState === 'visible') fetchProjects(query); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+  }, [fetchProjects, query]);
+
   const handleSearch = (val) => {
     setQuery(val);
     setSearchParams(val ? { q: val } : {});
@@ -293,45 +304,59 @@ export default function Projects() {
                 </tr>
               </thead>
               <tbody>
-                {projects.map((p) => (
-                  <tr
-                    key={p.id}
-                    className="clickable"
-                    onClick={() => navigate(`/projects/${p.id}`)}
-                  >
-                    <td className="mono muted">{p.code}</td>
-                    <td className="fw-600">{p.title}</td>
-                    <td className="muted">{p.type || '—'}</td>
-                    <td className="muted text-sm" style={{ whiteSpace: 'nowrap' }}>
-                      {fmtDate(p.approved_start_date)} – {fmtDate(p.approved_end_date)}
-                    </td>
-                    <td><StatusBadge status={p.status} /></td>
-                    {isAdmin && (
-                      <td onClick={(e) => e.stopPropagation()}>
-                        <div className="cell-actions">
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-icon btn-sm"
-                            title="Edit project"
-                            aria-label="Edit project"
-                            onClick={() => { setEditProject(p); setShowForm(true); }}
-                          >
-                            <Icon name="edit" />
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-danger-ghost btn-icon btn-sm"
-                            title="Delete project"
-                            aria-label="Delete project"
-                            onClick={() => setDeleteProject(p)}
-                          >
-                            <Icon name="trash" />
-                          </button>
-                        </div>
+                {projects.map((p) => {
+                  let tone = null;
+                  if (isAdmin) {
+                    if (p.denied_delays > 0) tone = 'danger';
+                    else if (p.pending_submit > 0 || (p.status !== 'completed' && (!p.has_poc || !p.has_resource))) tone = 'warning';
+                  } else {
+                    if (p.pending_approvals > 0 || p.pending_delays > 0) tone = 'warning';
+                    else if (p.is_new_assignment) tone = 'info';
+                  }
+                  const rowClass = tone ? `clickable row-attention row-attention-${tone}` : 'clickable';
+
+                  return (
+                    <tr
+                      key={p.id}
+                      className={rowClass}
+                      onClick={() => navigate(`/projects/${p.id}`)}
+                    >
+                      <td className="mono muted">{p.code}</td>
+                      <td>
+                        <div className="fw-600 row-title">{p.title}</div>
                       </td>
-                    )}
-                  </tr>
-                ))}
+                      <td className="muted">{p.type || '—'}</td>
+                      <td className="muted text-sm" style={{ whiteSpace: 'nowrap' }}>
+                        {fmtDate(p.approved_start_date)} – {fmtDate(p.approved_end_date)}
+                      </td>
+                      <td><StatusBadge status={p.status} /></td>
+                      {isAdmin && (
+                        <td onClick={(e) => e.stopPropagation()}>
+                          <div className="cell-actions">
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-icon btn-sm"
+                              title="Edit project"
+                              aria-label="Edit project"
+                              onClick={() => { setEditProject(p); setShowForm(true); }}
+                            >
+                              <Icon name="edit" />
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-danger-ghost btn-icon btn-sm"
+                              title="Delete project"
+                              aria-label="Delete project"
+                              onClick={() => setDeleteProject(p)}
+                            >
+                              <Icon name="trash" />
+                            </button>
+                          </div>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -341,7 +366,15 @@ export default function Projects() {
       {showForm && (
         <ProjectFormModal
           project={editProject}
-          onSave={() => { setShowForm(false); setEditProject(null); fetchProjects(query); }}
+          onSave={(created) => {
+            if (!editProject && created?.id) {
+              navigate(`/projects/${created.id}?setup=1`);
+            } else {
+              setShowForm(false);
+              setEditProject(null);
+              fetchProjects(query);
+            }
+          }}
           onClose={() => { setShowForm(false); setEditProject(null); }}
         />
       )}

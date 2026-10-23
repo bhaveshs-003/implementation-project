@@ -54,6 +54,15 @@ export function canCompleteMilestone(milestone, subTasks, project) {
   return { ok: true };
 }
 
+// ── In-progress gate ─────────────────────────────────────────────────────────
+
+export function canAdvanceToInProgress(pocCount, resourceCount, milestoneCount) {
+  if (pocCount === 0)      return { ok: false, reason: 'Assign a Partner POC before starting the project' };
+  if (resourceCount === 0) return { ok: false, reason: 'Assign at least one resource before starting the project' };
+  if (milestoneCount === 0) return { ok: false, reason: 'Add at least one milestone before starting the project' };
+  return { ok: true };
+}
+
 // ── Submit for approval rules ─────────────────────────────────────────────────
 
 export function canSubmitForApproval(milestone, existingApproval, pocCount) {
@@ -111,6 +120,16 @@ export function canReplyToDelay(delay, person) {
     return { ok: false, reason: 'Replies only allowed on denied threads' };
   }
   // Both roles can reply to a denied thread.
+  return { ok: true };
+}
+
+export function canCloseDelay(delay, person) {
+  if (person.role !== 'admin') {
+    return { ok: false, reason: 'Only an admin can close a delay thread' };
+  }
+  if (delay.status !== 'denied') {
+    return { ok: false, reason: 'Only denied threads can be closed' };
+  }
   return { ok: true };
 }
 

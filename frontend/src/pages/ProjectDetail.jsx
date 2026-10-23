@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../lib/api.js';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import Modal from '../components/Modal.jsx';
@@ -422,12 +422,28 @@ function MilestonesTab({ milestones, project, assignments, isAdmin, projectId, m
           <div className="card-title">Milestones</div>
           <div className="card-subtitle">{doneMs} of {milestones.length} completed</div>
         </div>
-        {isAdmin && project.status !== 'completed' && (
-          <button className="btn btn-primary" onClick={() => openModal('add-milestone')}>
-            <Icon name="plus" />
-            Add Milestone
-          </button>
-        )}
+        {isAdmin && project.status !== 'completed' && (() => {
+          const hasPoc      = assignments.some(a => a.assignment_role === 'poc');
+          const hasResource = assignments.some(a => a.assignment_role === 'resource');
+          const missing     = !hasPoc || !hasResource;
+          const tip         = !hasPoc && !hasResource ? 'Assign a Partner POC and resources first'
+                            : !hasPoc                 ? 'Assign a Partner POC first'
+                            :                          'Assign at least one resource first';
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+              <button
+                className="btn btn-primary"
+                onClick={() => !missing && openModal('add-milestone')}
+                disabled={missing}
+                title={missing ? tip : undefined}
+              >
+                <Icon name="plus" />
+                Add Milestone
+              </button>
+              {missing && <div className="help text-xs">{tip}</div>}
+            </div>
+          );
+        })()}
       </div>
 
       {milestones.length === 0 && (
@@ -501,58 +517,90 @@ function MilestonesTab({ milestones, project, assignments, isAdmin, projectId, m
       )}
 
       {/* Complete Milestone Modal */}
-      {modal?.type === 'complete-milestone' && (
-        <Modal
-          title="Mark Milestone Complete"
-          onClose={closeModal}
-          footer={
-            <>
-              <button className="btn btn-secondary" onClick={closeModal}>Cancel</button>
-              <button
-                className="btn btn-primary"
-                onClick={() => doSave(() => apiFetch(`/api/projects/${projectId}/milestones/${modal.milestoneId}/complete`, {
-                  method: 'POST',
-                  body: { on_time: form.on_time !== 'false', delay_side: form.delay_side, delay_reason: form.delay_reason },
-                }), { apply: actions.milestoneUpdated })}
-                disabled={!form.on_time || (form.on_time === 'false' && !form.delay_side) || saving}
-              >
-                {saving ? 'Saving...' : 'Mark Complete'}
-              </button>
-            </>
-          }
-        >
-          <div className="field">
-            <span className="label">Was this milestone completed on time?</span>
-            {[['true', 'Yes, on time', 'checkCircle'], ['false', 'No, delayed', 'alertTriangle']].map(([v, l, icon]) => (
-              <label key={v} className={`choice${form.on_time === v ? ' selected' : ''}`}>
-                <input type="radio" name="on_time" value={v} checked={form.on_time === v}
-                  onChange={() => handleField('on_time', v)} />
-                <Icon name={icon} size={16} style={{ color: v === 'true' ? 'var(--success)' : 'var(--warning)' }} />
-                <span className="fw-600 text-sm">{l}</span>
-              </label>
-            ))}
-          </div>
-          {form.on_time === 'false' && (
-            <>
-              <div className="field">
-                <label className="label" htmlFor="delay-side">Delay side *</label>
-                <select id="delay-side" className="select" value={form.delay_side || ''} onChange={e => handleField('delay_side', e.target.value)}>
-                  <option value="">Select...</option>
-                  <option value="company">Company</option>
-                  <option value="partner">Partner</option>
-                </select>
-              </div>
-              <div className="field">
-                <label className="label" htmlFor="delay-reason">Delay reason</label>
-                <textarea id="delay-reason" className="textarea" value={form.delay_reason || ''} onChange={e => handleField('delay_reason', e.target.value)}
-                  rows={3} />
-                <div className="help">This opens a delay thread the other side can accept or dispute.</div>
-              </div>
-            </>
-          )}
-          <ModalError message={modalError} />
-        </Modal>
-      )}
+      {modal?.type === 'complete-milestone' && (() => {
+        const hasPoc = assignments.some(a => a.assignment_role === 'poc');
+        const shouldSubmit = hasPoc && (form.submitAfter ?? true);
+        return (
+          <Modal
+            title="Mark Milestone Complete"
+            onClose={closeModal}
+            footer={
+              <>
+                <button className="btn btn-secondary" onClick={closeModal}>Cancel</button>
+                <button
+                  className="btn btn-primary"
+                  onClick={async () => {
+                    await doSave(async () => {
+                      const completed = await apiFetch(`/api/projects/${projectId}/milestones/${modal.milestoneId}/complete`, {
+                        method: 'POST',
+                        body: { on_time: form.on_time !== 'false', delay_side: form.delay_side, delay_reason: form.delay_reason },
+                      });
+                      if (shouldSubmit) {
+                        const approval = await apiFetch(`/api/projects/${projectId}/milestones/${modal.milestoneId}/submit-approval`, {
+                          method: 'POST',
+                        });
+                        actions.approvalUpdated(approval);
+                      }
+                      return completed;
+                    }, { apply: actions.milestoneUpdated });
+                  }}
+                  disabled={!form.on_time || (form.on_time === 'false' && !form.delay_side) || saving}
+                >
+                  {saving ? 'Saving...' : shouldSubmit ? 'Mark Complete & Submit' : 'Mark Complete'}
+                </button>
+              </>
+            }
+          >
+            <div className="field">
+              <span className="label">Was this milestone completed on time?</span>
+              {[['true', 'Yes, on time', 'checkCircle'], ['false', 'No, delayed', 'alertTriangle']].map(([v, l, icon]) => (
+                <label key={v} className={`choice${form.on_time === v ? ' selected' : ''}`}>
+                  <input type="radio" name="on_time" value={v} checked={form.on_time === v}
+                    onChange={() => handleField('on_time', v)} />
+                  <Icon name={icon} size={16} style={{ color: v === 'true' ? 'var(--success)' : 'var(--warning)' }} />
+                  <span className="fw-600 text-sm">{l}</span>
+                </label>
+              ))}
+            </div>
+            {form.on_time === 'false' && (
+              <>
+                <div className="field">
+                  <label className="label" htmlFor="delay-side">Delay side *</label>
+                  <select id="delay-side" className="select" value={form.delay_side || ''} onChange={e => handleField('delay_side', e.target.value)}>
+                    <option value="">Select...</option>
+                    <option value="company">Company</option>
+                    <option value="partner">Partner</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label className="label" htmlFor="delay-reason">Delay reason</label>
+                  <textarea id="delay-reason" className="textarea" value={form.delay_reason || ''} onChange={e => handleField('delay_reason', e.target.value)}
+                    rows={3} />
+                  <div className="help">This opens a delay thread the other side can accept or dispute.</div>
+                </div>
+              </>
+            )}
+            <div className="field" style={{ marginTop: 12 }}>
+              {hasPoc ? (
+                <label className="choice">
+                  <input
+                    type="checkbox"
+                    checked={form.submitAfter ?? true}
+                    onChange={e => handleField('submitAfter', e.target.checked)}
+                  />
+                  <span className="fw-600 text-sm">Also submit for partner approval</span>
+                </label>
+              ) : (
+                <div className="alert alert-info" style={{ marginBottom: 0 }}>
+                  <Icon name="info" />
+                  <span>No Partner POC assigned — submit for approval separately after assigning one.</span>
+                </div>
+              )}
+            </div>
+            <ModalError message={modalError} />
+          </Modal>
+        );
+      })()}
 
       {/* Approve Modal */}
       {modal?.type === 'approve' && (
@@ -701,6 +749,7 @@ function DelayThread({ delay, isAdmin, projectId, resources, onChanged }) {
   };
 
   const isCompany = localDelay.side === 'company';
+  const adminReplyCount = (localDelay.messages || []).filter(m => m.author_role === 'admin' && !m.action).length;
 
   return (
     <div className="card mb-16">
@@ -779,24 +828,57 @@ function DelayThread({ delay, isAdmin, projectId, resources, onChanged }) {
                   Accept &amp; Close
                 </button>
               )}
-              <div className="row" style={{ alignItems: 'flex-end' }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <MentionInput
-                    value={replyBody}
-                    onChange={setReplyBody}
-                    placeholder={`${isAdmin ? 'Admin reply' : 'Reply'}… type @name to mention someone`}
-                    resources={resources}
-                  />
+              {isAdmin ? (
+                <>
+                  {adminReplyCount === 0 && (
+                    <div className="row mb-8" style={{ alignItems: 'flex-end' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <MentionInput
+                          value={replyBody}
+                          onChange={setReplyBody}
+                          placeholder="Admin reply… type @name to mention someone"
+                          resources={resources}
+                        />
+                      </div>
+                      <button
+                        className="btn btn-primary"
+                        onClick={() => { doAction('reply', { body: replyBody }); setReplyBody(''); }}
+                        disabled={!replyBody.trim() || replyLoading}
+                      >
+                        <Icon name="send" />
+                        Send Reply
+                      </button>
+                    </div>
+                  )}
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => doAction('close')}
+                    disabled={replyLoading}
+                  >
+                    <Icon name="x" size={14} />
+                    Close Thread
+                  </button>
+                </>
+              ) : (
+                <div className="row" style={{ alignItems: 'flex-end' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <MentionInput
+                      value={replyBody}
+                      onChange={setReplyBody}
+                      placeholder="Reply… type @name to mention someone"
+                      resources={resources}
+                    />
+                  </div>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => { doAction('reply', { body: replyBody }); setReplyBody(''); }}
+                    disabled={!replyBody.trim() || replyLoading}
+                  >
+                    <Icon name="send" />
+                    Send Reply
+                  </button>
                 </div>
-                <button
-                  className="btn btn-primary"
-                  onClick={() => { doAction('reply', { body: replyBody }); setReplyBody(''); }}
-                  disabled={!replyBody.trim() || replyLoading}
-                >
-                  <Icon name="send" />
-                  Send Reply
-                </button>
-              </div>
+              )}
             </div>
           )}
         </div>
@@ -941,16 +1023,12 @@ function AdvanceStatusModal({ project, projectId, form, handleField, modalError,
 }
 
 // ── OverviewTab — module-level ───────────────────────────────────────────────
-function OverviewTab({ project, milestones, assignments, allPeople, isAdmin, modal, saving, openModal, closeModal, onAssign, actions, busy }) {
+function OverviewTab({ project, milestones, assignments, isAdmin, actions, busy }) {
   const pocs = assignments.filter(a => a.assignment_role === 'poc');
   const resources = assignments.filter(a => a.assignment_role === 'resource');
   const totalMs = milestones.length;
   const doneMs = milestones.filter(m => m.status === 'completed').length;
   const pct = Math.min(100, Math.round((doneMs / (totalMs || 1)) * 100));
-
-  const eligibleForRole = (role) => allPeople
-    .filter(p => role === 'poc' ? p.role === 'partner_poc' : p.role === 'resource')
-    .filter(p => !assignments.find(a => a.id === p.id));
 
   return (
     <div>
@@ -991,8 +1069,20 @@ function OverviewTab({ project, milestones, assignments, allPeople, isAdmin, mod
           </div>
         </div>
       </div>
+    </div>
+  );
+}
 
-      {/* Assignments */}
+// ── ResourcesTab ─────────────────────────────────────────────────────────────
+function ResourcesTab({ assignments, allPeople, isAdmin, modal, saving, openModal, closeModal, onAssign, actions, busy }) {
+  const pocs = assignments.filter(a => a.assignment_role === 'poc');
+  const resources = assignments.filter(a => a.assignment_role === 'resource');
+  const eligibleForRole = (role) => allPeople
+    .filter(p => role === 'poc' ? p.role === 'partner_poc' : p.role === 'resource')
+    .filter(p => !assignments.find(a => a.id === p.id));
+
+  return (
+    <div>
       <div className="grid-2">
         <TeamCard
           title="Partner POC" subtitle="Partner-side point of contact"
@@ -1005,8 +1095,6 @@ function OverviewTab({ project, milestones, assignments, allPeople, isAdmin, mod
           isAdmin={isAdmin} openModal={openModal} actions={actions} busy={busy}
         />
       </div>
-
-      {/* Assign Modal */}
       {modal?.type === 'assign' && (
         <AssignModal
           role={modal.role}
@@ -1020,12 +1108,137 @@ function OverviewTab({ project, milestones, assignments, allPeople, isAdmin, mod
   );
 }
 
+// ── ProjectSetupGuide ─────────────────────────────────────────────────────────
+function ProjectSetupGuide({ assignments, milestones, openModal, setTab, onDismiss }) {
+  const hasPoc      = assignments.some(a => a.assignment_role === 'poc');
+  const hasResource = assignments.some(a => a.assignment_role === 'resource');
+  const hasMilestone = milestones.length > 0;
+
+  const steps = [
+    {
+      num: 1,
+      title: 'Assign Partner POC',
+      desc: 'Add the partner-side contact who will approve milestones.',
+      done: hasPoc,
+      blocked: false,
+      action: () => { setTab('resources'); openModal('assign', { role: 'poc' }); },
+      actionLabel: 'Assign POC',
+    },
+    {
+      num: 2,
+      title: 'Assign Organisation Resources',
+      desc: 'Add team members who will deliver this project.',
+      done: hasResource,
+      blocked: false,
+      action: () => { setTab('resources'); openModal('assign', { role: 'resource' }); },
+      actionLabel: 'Assign Resources',
+    },
+    {
+      num: 3,
+      title: 'Add First Milestone',
+      desc: 'Break the project into trackable phases with sub-tasks and approvals.',
+      done: hasMilestone,
+      blocked: !hasPoc || !hasResource,
+      action: () => { setTab('milestones'); openModal('add-milestone'); },
+      actionLabel: 'Add Milestone',
+    },
+  ];
+
+  return (
+    <div className="card setup-guide mb-24">
+      <div className="card-header">
+        <div>
+          <div className="card-title">Project Setup</div>
+          <div className="card-subtitle">Complete these steps to get your project ready to track.</div>
+        </div>
+        <button className="btn btn-ghost btn-sm" onClick={onDismiss}>Skip setup</button>
+      </div>
+      <div className="setup-steps">
+        {steps.map((step, i) => (
+          <div key={step.num} className={`setup-step${step.done ? ' setup-step-done' : step.blocked ? ' setup-step-blocked' : ' setup-step-active'}`}>
+            <div className="setup-step-connector" aria-hidden="true" />
+            <div className="setup-step-indicator">
+              {step.done
+                ? <Icon name="checkCircle" size={22} />
+                : <span className="setup-step-num">{step.num}</span>}
+            </div>
+            <div className="setup-step-body">
+              <div className="setup-step-title">{step.title}</div>
+              <div className="setup-step-desc">{step.desc}</div>
+              {step.blocked && (
+                <div className="text-xs" style={{ color: 'var(--text-3)', marginTop: 4 }}>
+                  Complete steps 1 &amp; 2 first.
+                </div>
+              )}
+            </div>
+            {!step.done && (
+              <button
+                className="btn btn-sm btn-primary"
+                style={{ flexShrink: 0 }}
+                onClick={step.action}
+                disabled={step.blocked}
+              >
+                {step.actionLabel}
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── ProjectHealthBanner ───────────────────────────────────────────────────────
+function ProjectHealthBanner({ milestones, assignments, delays, isAdmin }) {
+  const chips = [];
+  const allDelays = delays.flatMap(g => g.delays || []);
+
+  if (isAdmin) {
+    if (!assignments.some(a => a.assignment_role === 'poc'))
+      chips.push({ tone: 'warning', label: 'No Partner POC assigned' });
+    if (!assignments.some(a => a.assignment_role === 'resource'))
+      chips.push({ tone: 'warning', label: 'No resources assigned' });
+    if (milestones.length === 0)
+      chips.push({ tone: 'warning', label: 'No milestones added' });
+
+    const n = milestones.filter(m => m.status === 'completed' && !m.approval).length;
+    if (n > 0) chips.push({ tone: 'warning', label: `${n} milestone${n > 1 ? 's' : ''} awaiting approval submission` });
+
+    const p = allDelays.filter(d => d.status === 'pending').length;
+    if (p > 0) chips.push({ tone: 'warning', label: `${p} delay thread${p > 1 ? 's' : ''} awaiting partner decision` });
+
+    const dn = allDelays.filter(d => d.status === 'denied').length;
+    if (dn > 0) chips.push({ tone: 'danger', label: `${dn} denied delay thread${dn > 1 ? 's' : ''} — action needed` });
+  } else {
+    const a = milestones.filter(m => m.approval?.status === 'pending').length;
+    if (a > 0) chips.push({ tone: 'warning', label: `${a} milestone${a > 1 ? 's' : ''} awaiting your approval` });
+    const p = allDelays.filter(d => d.status === 'pending').length;
+    if (p > 0) chips.push({ tone: 'warning', label: `${p} delay thread${p > 1 ? 's' : ''} awaiting your decision` });
+  }
+
+  if (!chips.length) return null;
+  return (
+    <div className="health-banner">
+      {chips.map((c, i) => (
+        <span key={i} className={`health-chip health-chip-${c.tone}`}>
+          <Icon name={c.tone === 'danger' ? 'alertTriangle' : 'info'} size={12} />
+          {c.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 // ── Main ProjectDetail ───────────────────────────────────────────────────────
 export default function ProjectDetail() {
   const { id } = useParams();
   const { person } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const isAdmin = person?.role === 'admin';
+  const inSetup = isAdmin && searchParams.get('setup') === '1';
+
+  const dismissSetup = () => setSearchParams(p => { const n = new URLSearchParams(p); n.delete('setup'); return n; });
 
   const [project, setProject] = useState(null);
   const [milestones, setMilestones] = useState([]);
@@ -1086,6 +1299,14 @@ export default function ProjectDetail() {
     };
     init();
   }, [loadProject, isAdmin]);
+
+  // Auto-dismiss setup guide once all three steps are complete.
+  useEffect(() => {
+    if (!inSetup) return;
+    const hasPoc      = assignments.some(a => a.assignment_role === 'poc');
+    const hasResource = assignments.some(a => a.assignment_role === 'resource');
+    if (hasPoc && hasResource && milestones.length > 0) dismissSetup();
+  }, [assignments, milestones, inSetup]);
 
   const showSkeleton = useDelayedLoading(loading || !project);
   if (loading || !project) return showSkeleton ? <ProjectDetailSkeleton /> : null;
@@ -1169,11 +1390,21 @@ export default function ProjectDetail() {
 
   const delayThreadCount = delays.reduce((n, g) => n + (Array.isArray(g.delays) ? g.delays.length : 0), 0);
   const TABS = [
-    { id: 'overview', label: 'Overview' },
+    { id: 'overview',   label: 'Overview' },
+    { id: 'resources',  label: 'Resources', count: assignments.length },
     { id: 'milestones', label: 'Milestones', count: milestones.length },
-    { id: 'comments', label: 'Comments', count: delayThreadCount },
+    { id: 'comments',   label: 'Comments',   count: delayThreadCount },
   ];
   const canAdvance = isAdmin && STATUS_ORDER.indexOf(project.status) < STATUS_ORDER.length - 1;
+
+  // Blockers that must be resolved before moving not_started → in_progress
+  const hasPocAssigned      = assignments.some(a => a.assignment_role === 'poc');
+  const hasResourceAssigned = assignments.some(a => a.assignment_role === 'resource');
+  const startBlockers = project.status === 'not_started' ? [
+    !hasPocAssigned      && 'Assign a Partner POC',
+    !hasResourceAssigned && 'Assign at least one resource',
+    milestones.length === 0 && 'Add at least one milestone',
+  ].filter(Boolean) : [];
 
   return (
     <div>
@@ -1199,13 +1430,35 @@ export default function ProjectDetail() {
           </div>
         </div>
         {canAdvance && (
-          <div className="page-actions">
-            <button className="btn btn-primary" onClick={() => openModal('advance-status')}>
+          <div className="page-actions" style={{ alignItems: 'flex-end' }}>
+            <button
+              className="btn btn-primary"
+              onClick={() => startBlockers.length === 0 && openModal('advance-status')}
+              disabled={startBlockers.length > 0}
+              title={startBlockers.length > 0 ? startBlockers.join(' · ') : undefined}
+            >
               Advance Status
             </button>
+            {startBlockers.length > 0 && (
+              <div className="help text-xs" style={{ marginTop: 4, textAlign: 'right' }}>
+                {startBlockers.map((b, i) => <div key={i}>{b}</div>)}
+              </div>
+            )}
           </div>
         )}
       </div>
+
+      {inSetup && (
+        <ProjectSetupGuide
+          assignments={assignments} milestones={milestones}
+          openModal={openModal} setTab={setTab} onDismiss={dismissSetup}
+        />
+      )}
+
+      <ProjectHealthBanner
+        milestones={milestones} assignments={assignments}
+        delays={delays} isAdmin={isAdmin}
+      />
 
       <div className="tabs" role="tablist">
         {TABS.map(t => (
@@ -1225,7 +1478,12 @@ export default function ProjectDetail() {
       {tab === 'overview' && (
         <OverviewTab
           project={project} milestones={milestones} assignments={assignments}
-          allPeople={allPeople} isAdmin={isAdmin}
+          isAdmin={isAdmin} actions={actions} busy={busy}
+        />
+      )}
+      {tab === 'resources' && (
+        <ResourcesTab
+          assignments={assignments} allPeople={allPeople} isAdmin={isAdmin}
           modal={modal} saving={saving}
           openModal={openModal} closeModal={closeModal}
           onAssign={handleAssign} actions={actions} busy={busy}

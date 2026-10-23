@@ -2,9 +2,14 @@ import { Router } from 'express';
 import { query } from '../db/pool.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { resolveProjectScope } from '../middleware/scope.js';
-import { validateProjectStatusTransition, canCompleteProject, auditLog } from '../rules/rules.js';
+import { validateProjectStatusTransition, canAdvanceToInProgress, canCompleteProject, auditLog } from '../rules/rules.js';
 
 const router = Router();
+
+const LAST_AUTHOR_ROLE = `(
+  SELECT pe.role FROM delay_messages dm JOIN people pe ON pe.id = dm.author_id
+  WHERE dm.delay_id = d.id ORDER BY dm.created_at DESC LIMIT 1
+)`;
 
 function validateDateRange(start, end, label) {
   if (start && end && new Date(end) < new Date(start)) {
@@ -20,22 +25,61 @@ router.get('/', requireAuth, async (req, res) => {
 
     if (req.person.role === 'admin') {
       const params = [];
-      let sql = `SELECT id, code, title, type, status, description,
-                   company_start_date, company_end_date,
-                   partner_start_date, partner_end_date,
-                   approved_start_date, approved_end_date,
-                   created_at
-                 FROM projects WHERE deleted_at IS NULL`;
-      if (q) { params.push(`%${q}%`); sql += ` AND (code ILIKE $1 OR title ILIKE $1)`; }
-      sql += ' ORDER BY created_at DESC';
+      let sql = `
+        SELECT
+          p.id, p.code, p.title, p.type, p.status, p.description,
+          p.company_start_date, p.company_end_date,
+          p.partner_start_date, p.partner_end_date,
+          p.approved_start_date, p.approved_end_date,
+          p.created_at,
+          -- Pending action flags for admin
+          EXISTS(
+            SELECT 1 FROM project_assignments
+            WHERE project_id = p.id AND assignment_role = 'poc'
+          ) AS has_poc,
+          EXISTS(
+            SELECT 1 FROM project_assignments
+            WHERE project_id = p.id AND assignment_role = 'resource'
+          ) AS has_resource,
+          (
+            SELECT COUNT(*)::int FROM milestones m
+            LEFT JOIN approvals a ON a.milestone_id = m.id
+            WHERE m.project_id = p.id AND m.status = 'completed' AND a.id IS NULL
+          ) AS pending_submit,
+          (
+            SELECT COUNT(*)::int FROM delays d
+            JOIN milestones m ON m.id = d.milestone_id
+            WHERE m.project_id = p.id AND d.status = 'denied'
+              AND COALESCE(${LAST_AUTHOR_ROLE}, '') <> 'admin'
+          ) AS denied_delays
+        FROM projects p
+        WHERE p.deleted_at IS NULL`;
+      if (q) { params.push(`%${q}%`); sql += ` AND (p.code ILIKE $1 OR p.title ILIKE $1)`; }
+      sql += ' ORDER BY p.created_at DESC';
       rows = (await query(sql, params)).rows;
     } else {
       const params = [req.person.id];
-      let sql = `SELECT p.id, p.code, p.title, p.type, p.status,
-                   p.approved_start_date, p.approved_end_date, p.created_at
-                 FROM projects p
-                 JOIN project_assignments pa ON pa.project_id = p.id
-                 WHERE p.deleted_at IS NULL AND pa.person_id = $1 AND pa.assignment_role = 'poc'`;
+      let sql = `
+        SELECT
+          p.id, p.code, p.title, p.type, p.status,
+          p.approved_start_date, p.approved_end_date, p.created_at,
+          -- Pending action flags for partner POC
+          (pa.seen_at IS NULL) AS is_new_assignment,
+          (
+            SELECT COUNT(*)::int FROM approvals a
+            JOIN milestones m ON m.id = a.milestone_id
+            WHERE m.project_id = p.id AND a.status = 'pending'
+          ) AS pending_approvals,
+          (
+            SELECT COUNT(*)::int FROM delays d
+            JOIN milestones m ON m.id = d.milestone_id
+            WHERE m.project_id = p.id
+              AND (d.status = 'pending'
+                   OR (d.status = 'denied' AND ${LAST_AUTHOR_ROLE} = 'admin'))
+          ) AS pending_delays
+        FROM projects p
+        JOIN project_assignments pa ON pa.project_id = p.id
+        WHERE p.deleted_at IS NULL AND pa.person_id = $1 AND pa.assignment_role = 'poc'`;
       if (q) { params.push(`%${q}%`); sql += ` AND (p.code ILIKE $${params.length} OR p.title ILIKE $${params.length})`; }
       sql += ' ORDER BY p.created_at DESC';
       rows = (await query(sql, params)).rows;
@@ -89,9 +133,13 @@ router.post('/', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-router.get('/:projectId', requireAuth, resolveProjectScope, (req, res) => {
+router.get('/:projectId', requireAuth, resolveProjectScope, async (req, res) => {
   // Partners see only approved date range; admins see all three date ranges.
   if (req.person.role !== 'admin') {
+    await query(
+      'UPDATE project_assignments SET seen_at = NOW() WHERE project_id = $1 AND person_id = $2 AND seen_at IS NULL',
+      [req.project.id, req.person.id]
+    ).catch(err => console.error('mark assignment seen failed:', err));
     const { company_start_date, company_end_date, partner_start_date, partner_end_date, ...safe } = req.project;
     return res.json(safe);
   }
@@ -111,6 +159,16 @@ router.put('/:projectId', requireAuth, requireAdmin, resolveProjectScope, async 
     if (newStatus !== project.status) {
       const { ok, reason } = validateProjectStatusTransition(project.status, newStatus);
       if (!ok) return res.status(422).json({ error: reason });
+
+      if (newStatus === 'in_progress' && project.status === 'not_started') {
+        const [pocRes, resRes, msRes] = await Promise.all([
+          query("SELECT COUNT(*)::int AS n FROM project_assignments WHERE project_id = $1 AND assignment_role = 'poc'", [project.id]),
+          query("SELECT COUNT(*)::int AS n FROM project_assignments WHERE project_id = $1 AND assignment_role = 'resource'", [project.id]),
+          query('SELECT COUNT(*)::int AS n FROM milestones WHERE project_id = $1', [project.id]),
+        ]);
+        const { ok: iOk, reason: iReason } = canAdvanceToInProgress(pocRes.rows[0].n, resRes.rows[0].n, msRes.rows[0].n);
+        if (!iOk) return res.status(422).json({ error: iReason });
+      }
 
       if (newStatus === 'completed') {
         if (!confirmCode || confirmCode !== project.code) {

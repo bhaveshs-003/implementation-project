@@ -94,9 +94,7 @@ h1, h2, h3, h4 { letter-spacing: -0.015em; color: var(--text); }
 }
 .sidebar-brand:hover { text-decoration: none; }
 .brand-mark {
-  width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center;
-  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 50%, #7c3aed 100%);
-  color: #fff; font-size: 13px; font-weight: 800; box-shadow: 0 2px 6px rgba(79, 70, 229, 0.35);
+  width: 32px; height: 32px; object-fit: contain; flex-shrink: 0;
 }
 .sidebar-nav { flex: 1; padding: 16px 12px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
 .sidebar-section {
@@ -123,6 +121,30 @@ h1, h2, h3, h4 { letter-spacing: -0.015em; color: var(--text); }
   border-bottom: 1px solid var(--border);
 }
 .topbar-spacer { flex: 1; }
+
+/* ── Pending indicator ───────────────────────────────────────────────────── */
+.pending-btn {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px; border-radius: var(--radius); border: none;
+  background: none; cursor: pointer; color: var(--text-2); flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+.pending-btn:hover { background: var(--surface-hover); color: var(--text); }
+.pending-count {
+  position: absolute; top: 2px; right: 2px;
+  min-width: 16px; height: 16px; padding: 0 3px;
+  border-radius: var(--radius-full); font-size: 10px; font-weight: 700; line-height: 16px;
+  text-align: center; background: var(--danger); color: #fff;
+  pointer-events: none;
+}
+.pending-dropdown { top: calc(100% + 6px); }
+.pending-item-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 20px; padding: 0 4px; margin-right: 6px; flex-shrink: 0;
+  border-radius: var(--radius-full); font-size: 11px; font-weight: 700;
+  background: var(--danger-soft); color: var(--danger);
+}
+
 .content { padding: 28px 32px 48px; width: 100%; max-width: 1280px; margin: 0 auto; animation: pd-fade-in 0.25s var(--ease); }
 
 .topbar .menu-toggle { display: none; }
@@ -274,6 +296,44 @@ h1, h2, h3, h4 { letter-spacing: -0.015em; color: var(--text); }
 .input-group-btn:hover { color: var(--text-1); background: var(--bg-2); }
 .input-group-btn svg { width: 16px; height: 16px; }
 
+/* ── Project setup guide ─────────────────────────────────────────────────── */
+.setup-guide { overflow: hidden; }
+.setup-steps { display: flex; flex-direction: column; }
+.setup-step {
+  display: flex; align-items: flex-start; gap: 16px;
+  padding: 18px 24px; position: relative;
+  border-top: 1px solid var(--border);
+  transition: background 0.15s;
+}
+.setup-step:first-child { border-top: none; }
+.setup-step-done { opacity: 0.55; }
+.setup-step-blocked { opacity: 0.45; }
+.setup-step-active { background: var(--primary-soft, #eff6ff); }
+
+.setup-step-indicator {
+  display: flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; flex-shrink: 0; margin-top: 1px;
+}
+.setup-step-done .setup-step-indicator { color: var(--success); }
+.setup-step-active .setup-step-indicator { color: var(--primary); }
+.setup-step-blocked .setup-step-indicator { color: var(--text-3); }
+.setup-step-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: var(--radius-full);
+  font-size: 12px; font-weight: 700;
+  border: 2px solid currentColor;
+}
+.setup-step-body { flex: 1; min-width: 0; }
+.setup-step-title { font-weight: 600; font-size: 14px; color: var(--text); margin-bottom: 2px; }
+.setup-step-done .setup-step-title { text-decoration: line-through; color: var(--text-3); }
+.setup-step-desc { font-size: 13px; color: var(--text-2); line-height: 1.5; }
+
+/* ── Project health banner ───────────────────────────────────────────────── */
+.health-banner { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+.health-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: var(--radius-full); font-size: 12px; font-weight: 600; line-height: 1; }
+.health-chip-warning { background: var(--warning-soft); color: #92400e; border: 1px solid #fde68a; }
+.health-chip-danger  { background: var(--danger-soft);  color: #991b1b; border: 1px solid #fecaca; }
+
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
 .form-section-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-3); margin: 8px 0 10px; }
 @media (max-width: 640px) { .form-grid { grid-template-columns: 1fr; } }
@@ -329,6 +389,18 @@ h1, h2, h3, h4 { letter-spacing: -0.015em; color: var(--text); }
 .table .muted { color: var(--text-2); }
 .table .mono { font-family: var(--font-mono); font-size: 13px; }
 .cell-actions { display: flex; gap: 4px; justify-content: flex-end; }
+
+/* ── Project list row highlights ─────────────────────────────────────────── */
+.table tbody tr.row-attention { --row-accent: var(--warning); --row-tint: rgba(245, 158, 11, 0.10); }
+.table tbody tr.row-attention-danger { --row-accent: var(--danger);  --row-tint: rgba(239, 68, 68, 0.10); }
+.table tbody tr.row-attention-info   { --row-accent: var(--primary); --row-tint: rgba(79, 70, 229, 0.08); }
+.table tbody tr.row-attention td { background: var(--row-tint); }
+.table tbody tr.row-attention td:first-child { box-shadow: inset 4px 0 0 var(--row-accent); }
+.table tbody tr.row-attention:hover td { background: color-mix(in srgb, var(--row-tint), var(--row-accent) 8%); }
+.table tbody tr.row-attention .row-title { display: flex; align-items: center; gap: 8px; }
+.table tbody tr.row-attention .row-title::before {
+  content: ''; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--row-accent);
+}
 
 /* ── Badges / chips ────────────────────────────────────────────────────────── */
 .badge {

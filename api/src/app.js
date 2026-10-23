@@ -12,6 +12,7 @@ import attachmentsRouter from './routes/attachments.js';
 import peopleRouter from './routes/people.js';
 import auditRouter from './routes/audit.js';
 import dashboardRouter from './routes/dashboard.js';
+import meRouter from './routes/me.js';
 import internalRouter from './routes/internal.js';
 import pool from './db/pool.js';
 
@@ -54,6 +55,7 @@ app.use('/api/projects/:projectId/delays', delaysRouter);
 app.use('/api/attachments', attachmentsRouter);
 app.use('/api/audit', auditRouter);
 app.use('/api/dashboard', dashboardRouter);
+app.use('/api/me', meRouter);
 app.use('/api/internal', internalRouter);
 
 // ── 404 catch-all ─────────────────────────────────────────────────────────────

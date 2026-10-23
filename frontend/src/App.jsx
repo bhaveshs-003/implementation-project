@@ -4,6 +4,7 @@ import { useAuth } from './contexts/AuthContext.jsx';
 import { PageLoader, useDelayedLoading } from './components/Spinner.jsx';
 import Icon, { Avatar } from './components/Icon.jsx';
 import { roleLabel } from './lib/format.js';
+import { apiFetch } from './lib/api.js';
 
 import Login from './pages/Login.jsx';
 import ForgotPassword from './pages/ForgotPassword.jsx';
@@ -102,6 +103,56 @@ function UserMenu({ person, signOut }) {
   );
 }
 
+function PendingIndicator() {
+  const [data, setData] = useState({ total: 0, items: [] });
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  useEffect(() => {
+    apiFetch('/api/me/pending').then(setData).catch(() => {});
+  }, [location.pathname]);
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  if (data.total === 0) return null;
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button
+        className="pending-btn"
+        onClick={() => setOpen(v => !v)}
+        aria-label={`${data.total} pending action${data.total > 1 ? 's' : ''}`}
+        title="Pending actions"
+      >
+        <Icon name="inbox" size={18} />
+        <span className="pending-count">{data.total > 99 ? '99+' : data.total}</span>
+      </button>
+
+      {open && (
+        <div className="dropdown pending-dropdown" style={{ right: 0, minWidth: 280 }}>
+          <div className="dropdown-header">Pending actions</div>
+          {data.items.map((item) => (
+            <button
+              key={item.type}
+              className="dropdown-item"
+              onClick={() => { setOpen(false); navigate(item.link); }}
+            >
+              <span className="pending-item-count">{item.count}</span>
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const PAGE_TITLES = [
   ['/dashboard', 'Dashboard'],
   ['/projects', 'Projects'],
@@ -140,7 +191,7 @@ function Shell({ children }) {
       <div className={`sidebar-backdrop${navOpen ? ' open' : ''}`} onClick={closeNav} />
       <aside className={`sidebar${navOpen ? ' open' : ''}`}>
         <Link to="/dashboard" className="sidebar-brand" onClick={closeNav}>
-          <span className="brand-mark">P</span>
+          <img src="/logo.png" alt="Mako IT Lab" className="brand-mark" />
           <span className="brand-text">ProjectDelivery</span>
         </Link>
         <nav className="sidebar-nav">
@@ -178,6 +229,7 @@ function Shell({ children }) {
           </button>
           <div className="text-sm muted">{title}</div>
           <div className="topbar-spacer" />
+          <PendingIndicator />
         </header>
         <main className="content" key={location.pathname}>
           {children}
