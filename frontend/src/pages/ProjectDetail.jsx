@@ -310,7 +310,7 @@ function MilestoneCard({ ms, project, isAdmin, openModal, actions, busy, onOpenC
   const approvalRejected = ms.approval?.status === 'rejected';
   const completedLate = ms.status === 'completed' && ms.on_time === false;
   const completedOnTime = ms.status === 'completed' && !completedLate;
-  const commentCount = (ms.delays || []).length;
+  const commentCount = (ms.delays || []).length + (ms.comment_count || 0);
   const stateClass = approvalRejected ? ' card-ms-rejected'
     : approvalPending ? ' card-ms-pending'
     : completedLate ? ' card-ms-delayed'
@@ -1171,8 +1171,109 @@ function DelayThread({ delay, isAdmin, projectId, resources, onChanged }) {
   );
 }
 
+// ── MilestoneConversation — free back-and-forth between admin and partner POC ─
+function MilestoneConversation({ milestone, projectId, resources, currentUserId, onPosted }) {
+  const [comments, setComments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [body, setBody] = useState('');
+  const [target, setTarget] = useState('');
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState('');
+  const listRef = useRef(null);
+  const base = `/api/projects/${projectId}/milestones/${milestone.id}/comments`;
+  const subTasks = milestone.sub_tasks || [];
+  const subTitle = (id) => subTasks.find(st => st.id === id)?.title;
+
+  const load = useCallback(async () => {
+    try {
+      const rows = await apiFetch(base);
+      setComments(rows);
+    } catch { /* keep what we have; next poll retries */ }
+    finally { setLoading(false); }
+  }, [base]);
+
+  useEffect(() => {
+    setLoading(true);
+    load();
+    const timer = setInterval(() => { if (document.visibilityState === 'visible') load(); }, 15000);
+    return () => clearInterval(timer);
+  }, [load]);
+
+  useEffect(() => {
+    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+  }, [comments.length]);
+
+  const send = async () => {
+    const text = body.trim();
+    if (!text || sending) return;
+    setSending(true);
+    setError('');
+    try {
+      const created = await apiFetch(base, { method: 'POST', body: { body: text, sub_task_id: target || null } });
+      setComments(prev => [...prev, created]);
+      setBody('');
+      onPosted?.();
+    } catch (err) {
+      setError(typeof err?.error === 'string' ? err.error : 'Could not send. Please try again.');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <section className="drawer-section">
+      <h4 className="drawer-section-title"><Icon name="message" size={14} /> Conversation</h4>
+      <div className="conversation" ref={listRef} aria-live="polite">
+        {loading && <div className="text-sm subtle">Loading conversation…</div>}
+        {!loading && comments.length === 0 && (
+          <div className="text-sm subtle">No messages yet. Start the conversation below.</div>
+        )}
+        {comments.map(c => {
+          const mine = c.author_id === currentUserId;
+          return (
+            <div key={c.id} className={`message convo-msg${mine ? ' convo-mine' : ''}`}>
+              <div className="message-meta row" style={{ gap: 6, flexWrap: 'wrap' }}>
+                <Avatar name={c.author_name} size="sm" />
+                <span className="fw-600" style={{ color: 'var(--text-2)' }}>{mine ? 'You' : c.author_name}</span>
+                <span>· {c.author_role === 'admin' ? 'Admin' : 'Partner POC'} · {new Date(c.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+                {c.sub_task_id && subTitle(c.sub_task_id) && <span className="badge">Sub-task: {subTitle(c.sub_task_id)}</span>}
+              </div>
+              <div className="text-sm" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{c.body}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="convo-composer" onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); send(); } }}>
+        {subTasks.length > 0 && (
+          <select className="select" value={target} onChange={e => setTarget(e.target.value)} aria-label="Comment on" style={{ marginBottom: 8 }}>
+            <option value="">About: whole milestone</option>
+            {subTasks.map(st => <option key={st.id} value={st.id}>About sub-task: {st.title}</option>)}
+          </select>
+        )}
+        <MentionInput
+          value={body}
+          onChange={setBody}
+          placeholder="Write a message… type @name to mention someone (Ctrl/Cmd+Enter to send)"
+          resources={resources}
+          multiline
+          rows={3}
+        />
+        {error && <div className="alert alert-error" role="alert" style={{ marginTop: 8, marginBottom: 0 }}><Icon name="alert" />{error}</div>}
+        <div className="row" style={{ justifyContent: 'space-between', marginTop: 8 }}>
+          <span className="text-xs subtle">Visible to the admin and Partner POCs on this project.</span>
+          <button className="btn btn-primary btn-sm" onClick={send} disabled={!body.trim() || sending}>
+            <Icon name="send" />
+            {sending ? 'Sending…' : 'Send'}
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 // ── MilestoneCommentsDrawer — side panel with the full conversation ──────────
-function MilestoneCommentsDrawer({ milestone, delays, isAdmin, projectId, resources, onChanged, onClose, openModal, actions, busy }) {
+function MilestoneCommentsDrawer({ milestone, delays, isAdmin, projectId, resources, currentUserId, onChanged, onClose, openModal, actions, busy }) {
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('keydown', onKey);
@@ -1186,7 +1287,6 @@ function MilestoneCommentsDrawer({ milestone, delays, isAdmin, projectId, resour
     .map(st => ({ st, threads: threads.filter(d => d.sub_task_id === st.id) }))
     .filter(g => g.threads.length > 0);
   const approval = milestone.approval;
-  const total = threads.length + (approval ? 1 : 0);
 
   const renderThreads = (list) => list.map(d => (
     <DelayThread key={d.id} delay={d} isAdmin={isAdmin} projectId={projectId} resources={resources} onChanged={onChanged} />
@@ -1210,13 +1310,10 @@ function MilestoneCommentsDrawer({ milestone, delays, isAdmin, projectId, resour
         </div>
 
         <div className="drawer-body">
-          {total === 0 && (
-            <div className="empty">
-              <div className="empty-icon"><Icon name="message" /></div>
-              <div className="empty-title">No comments yet</div>
-              <div className="empty-text">Delay discussions and approval notes for this milestone and its sub-tasks will appear here.</div>
-            </div>
-          )}
+          <MilestoneConversation
+            milestone={milestone} projectId={projectId} resources={resources}
+            currentUserId={currentUserId} onPosted={onChanged}
+          />
 
           {milestoneThreads.length > 0 && (
             <section className="drawer-section">
@@ -1950,7 +2047,7 @@ export default function ProjectDetail() {
         return ms ? (
           <MilestoneCommentsDrawer
             milestone={ms} delays={delays}
-            isAdmin={isAdmin} projectId={id} resources={assignments}
+            isAdmin={isAdmin} projectId={id} resources={assignments} currentUserId={person?.id}
             onChanged={() => loadProject(true)}
             onClose={() => setCommentsMsId(null)}
             openModal={openModal} actions={actions} busy={busy}

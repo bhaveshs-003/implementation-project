@@ -616,3 +616,9 @@ h1, h2, h3, h4 { letter-spacing: -0.015em; color: var(--text); }
 .drawer-section-title { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--text-2); margin-bottom: 10px; }
 .card-ms-rejected { border-color: var(--danger); box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12), var(--shadow-sm); }
 .card-ms-rejected > .card-header { background: var(--danger-soft); border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+
+/* ── Milestone conversation ────────────────────────────────────────────────── */
+.conversation { max-height: 340px; overflow-y: auto; padding: 4px 2px 8px; }
+.convo-msg { margin-right: 28px; background: var(--surface); }
+.convo-mine { margin-right: 0; margin-left: 28px; background: var(--primary-soft); border-color: #c7d2fe; }
+.convo-composer { margin-top: 10px; }

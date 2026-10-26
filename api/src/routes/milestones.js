@@ -26,7 +26,7 @@ router.get('/', requireAuth, resolveProjectScope, async (req, res) => {
     const projectId = req.project.id;
 
     // Flat read: one query per table
-    const [msRes, stRes, apRes, dlRes] = await Promise.all([
+    const [msRes, stRes, apRes, dlRes, ccRes] = await Promise.all([
       query('SELECT * FROM milestones WHERE project_id = $1 ORDER BY order_index, created_at', [projectId]),
       query('SELECT * FROM sub_tasks WHERE milestone_id IN (SELECT id FROM milestones WHERE project_id = $1) ORDER BY order_index, created_at', [projectId]),
       query(`SELECT a.*, p.name AS approved_by_name, rb.name AS rejected_by_name FROM approvals a
@@ -34,7 +34,10 @@ router.get('/', requireAuth, resolveProjectScope, async (req, res) => {
              LEFT JOIN people rb ON rb.id = a.rejected_by
              WHERE a.milestone_id IN (SELECT id FROM milestones WHERE project_id = $1)`, [projectId]),
       query('SELECT * FROM delays WHERE milestone_id IN (SELECT id FROM milestones WHERE project_id = $1)', [projectId]),
+      query(`SELECT milestone_id, COUNT(*)::int AS n FROM milestone_comments
+             WHERE milestone_id IN (SELECT id FROM milestones WHERE project_id = $1) GROUP BY milestone_id`, [projectId]),
     ]);
+    const commentCounts = Object.fromEntries(ccRes.rows.map(r => [r.milestone_id, r.n]));
 
     const subTaskMap = {};
     stRes.rows.forEach(st => { (subTaskMap[st.milestone_id] ||= []).push(st); });
@@ -48,7 +51,7 @@ router.get('/', requireAuth, resolveProjectScope, async (req, res) => {
       const safeApproval = approval && req.person.role === 'partner_poc'
         ? { ...approval, rating: undefined, comment: undefined }
         : approval;
-      return { ...m, sub_tasks: subTaskMap[m.id] || [], approval: safeApproval, delays: delayMap[m.id] || [] };
+      return { ...m, sub_tasks: subTaskMap[m.id] || [], approval: safeApproval, delays: delayMap[m.id] || [], comment_count: commentCounts[m.id] || 0 };
     });
 
     res.json(milestones);
