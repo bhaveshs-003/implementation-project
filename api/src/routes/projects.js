@@ -51,7 +51,12 @@ router.get('/', requireAuth, async (req, res) => {
             JOIN milestones m ON m.id = d.milestone_id
             WHERE m.project_id = p.id AND d.status = 'denied'
               AND COALESCE(${LAST_AUTHOR_ROLE}, '') <> 'admin'
-          ) AS denied_delays
+          ) AS denied_delays,
+          (
+            SELECT COUNT(*)::int FROM approvals a
+            JOIN milestones m ON m.id = a.milestone_id
+            WHERE m.project_id = p.id AND a.status = 'rejected'
+          ) AS rejected_approvals
         FROM projects p
         WHERE p.deleted_at IS NULL`;
       if (q) { params.push(`%${q}%`); sql += ` AND (p.code ILIKE $1 OR p.title ILIKE $1)`; }

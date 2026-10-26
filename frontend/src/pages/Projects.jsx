@@ -38,12 +38,26 @@ function ProjectFormModal({ project, onSave, onClose }) {
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [showOtherDates, setShowOtherDates] = useState(
+    isEdit && !!(project.company_start_date || project.company_end_date || project.partner_start_date || project.partner_end_date)
+  );
 
   const set = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    const ranges = [
+      ['Approved', form.approved_start_date, form.approved_end_date],
+      ['Company', form.company_start_date, form.company_end_date],
+      ['Partner', form.partner_start_date, form.partner_end_date],
+    ];
+    const bad = ranges.find(([, start, end]) => start && end && end < start);
+    if (bad) {
+      if (bad[0] !== 'Approved') setShowOtherDates(true);
+      setError(`${bad[0]} dates: end date cannot be before the start date.`);
+      return;
+    }
     setSaving(true);
     try {
       if (isEdit) {
@@ -112,19 +126,33 @@ function ProjectFormModal({ project, onSave, onClose }) {
         <hr className="divider" />
         <div className="form-section-title">Approved Dates</div>
         <div className="form-grid">
-          <div className="field"><label className="label">Start</label><input className="input" type="date" value={form.approved_start_date} onChange={set('approved_start_date')} /></div>
-          <div className="field"><label className="label">End</label><input className="input" type="date" value={form.approved_end_date} onChange={set('approved_end_date')} /></div>
+          <div className="field"><label className="label">Start</label><input className="input" type="date" value={form.approved_start_date} max={form.approved_end_date || undefined} onChange={set('approved_start_date')} /></div>
+          <div className="field"><label className="label">End</label><input className="input" type="date" value={form.approved_end_date} min={form.approved_start_date || undefined} onChange={set('approved_end_date')} /></div>
         </div>
-        <div className="form-section-title">Company Dates</div>
-        <div className="form-grid">
-          <div className="field"><label className="label">Start</label><input className="input" type="date" value={form.company_start_date} onChange={set('company_start_date')} /></div>
-          <div className="field"><label className="label">End</label><input className="input" type="date" value={form.company_end_date} onChange={set('company_end_date')} /></div>
-        </div>
-        <div className="form-section-title">Partner Dates</div>
-        <div className="form-grid">
-          <div className="field" style={{ marginBottom: 0 }}><label className="label">Start</label><input className="input" type="date" value={form.partner_start_date} onChange={set('partner_start_date')} /></div>
-          <div className="field" style={{ marginBottom: 0 }}><label className="label">End</label><input className="input" type="date" value={form.partner_end_date} onChange={set('partner_end_date')} /></div>
-        </div>
+        <button
+          type="button"
+          className="accordion-toggle"
+          aria-expanded={showOtherDates}
+          onClick={() => setShowOtherDates((v) => !v)}
+        >
+          <Icon name="chevronDown" />
+          Company &amp; Partner Dates
+          <span className="subtle text-sm">(optional)</span>
+        </button>
+        {showOtherDates && (
+          <div className="accordion-body">
+            <div className="form-section-title">Company Dates</div>
+            <div className="form-grid">
+              <div className="field"><label className="label">Start</label><input className="input" type="date" value={form.company_start_date} max={form.company_end_date || undefined} onChange={set('company_start_date')} /></div>
+              <div className="field"><label className="label">End</label><input className="input" type="date" value={form.company_end_date} min={form.company_start_date || undefined} onChange={set('company_end_date')} /></div>
+            </div>
+            <div className="form-section-title">Partner Dates</div>
+            <div className="form-grid">
+              <div className="field" style={{ marginBottom: 0 }}><label className="label">Start</label><input className="input" type="date" value={form.partner_start_date} max={form.partner_end_date || undefined} onChange={set('partner_start_date')} /></div>
+              <div className="field" style={{ marginBottom: 0 }}><label className="label">End</label><input className="input" type="date" value={form.partner_end_date} min={form.partner_start_date || undefined} onChange={set('partner_end_date')} /></div>
+            </div>
+          </div>
+        )}
       </form>
     </Modal>
   );
@@ -307,7 +335,7 @@ export default function Projects() {
                 {projects.map((p) => {
                   let tone = null;
                   if (isAdmin) {
-                    if (p.denied_delays > 0) tone = 'danger';
+                    if (p.denied_delays > 0 || p.rejected_approvals > 0) tone = 'danger';
                     else if (p.pending_submit > 0 || (p.status !== 'completed' && (!p.has_poc || !p.has_resource))) tone = 'warning';
                   } else {
                     if (p.pending_approvals > 0 || p.pending_delays > 0) tone = 'warning';

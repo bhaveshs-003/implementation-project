@@ -38,6 +38,23 @@ router.get('/pending', requireAuth, async (req, res) => {
         });
       }
 
+      const rejectedResult = await query(
+        `SELECT COUNT(*)::int AS n
+         FROM approvals a
+         JOIN milestones m ON m.id = a.milestone_id
+         JOIN projects p ON p.id = m.project_id
+         WHERE p.deleted_at IS NULL AND a.status = 'rejected'`
+      );
+      const rejectedCount = rejectedResult.rows[0].n;
+      if (rejectedCount > 0) {
+        items.push({
+          type: 'rejected_approvals',
+          count: rejectedCount,
+          label: `approval${rejectedCount > 1 ? 's' : ''} denied by the partner`,
+          link: '/projects',
+        });
+      }
+
       // Denied delay threads awaiting admin response
       const deniedResult = await query(
         `SELECT COUNT(*)::int AS n

@@ -13,6 +13,14 @@ function validateDateRange(start, end, label) {
   return null;
 }
 
+function validateAgainstProjectStart(project, dates) {
+  const projectStart = project.approved_start_date;
+  if (!projectStart) return null;
+  const floor = new Date(projectStart).toISOString().slice(0, 10);
+  const early = Object.values(dates).find(d => d && String(d).slice(0, 10) < floor);
+  return early ? `Milestone start date cannot be earlier than the project's approved start date (${floor})` : null;
+}
+
 router.get('/', requireAuth, resolveProjectScope, async (req, res) => {
   try {
     const projectId = req.project.id;
@@ -21,7 +29,9 @@ router.get('/', requireAuth, resolveProjectScope, async (req, res) => {
     const [msRes, stRes, apRes, dlRes] = await Promise.all([
       query('SELECT * FROM milestones WHERE project_id = $1 ORDER BY order_index, created_at', [projectId]),
       query('SELECT * FROM sub_tasks WHERE milestone_id IN (SELECT id FROM milestones WHERE project_id = $1) ORDER BY order_index, created_at', [projectId]),
-      query(`SELECT a.*, p.name AS approved_by_name FROM approvals a LEFT JOIN people p ON p.id = a.approved_by
+      query(`SELECT a.*, p.name AS approved_by_name, rb.name AS rejected_by_name FROM approvals a
+             LEFT JOIN people p ON p.id = a.approved_by
+             LEFT JOIN people rb ON rb.id = a.rejected_by
              WHERE a.milestone_id IN (SELECT id FROM milestones WHERE project_id = $1)`, [projectId]),
       query('SELECT * FROM delays WHERE milestone_id IN (SELECT id FROM milestones WHERE project_id = $1)', [projectId]),
     ]);
@@ -62,6 +72,10 @@ router.post('/', requireAuth, requireAdmin, resolveProjectScope, async (req, res
       validateDateRange(approved_start_date, approved_end_date, 'Approved'),
     ].filter(Boolean);
     if (dateErrors.length) return res.status(422).json({ error: dateErrors[0] });
+    const startError = validateAgainstProjectStart(req.project, {
+      company_start_date, partner_start_date, approved_start_date,
+    });
+    if (startError) return res.status(422).json({ error: startError });
 
     const maxIdx = await query('SELECT COALESCE(MAX(order_index),0)+1 AS next FROM milestones WHERE project_id=$1', [req.project.id]);
     const result = await query(
@@ -91,6 +105,7 @@ router.put('/:milestoneId', requireAuth, requireAdmin, resolveProjectScope, asyn
       company_start_date, company_end_date,
       partner_start_date, partner_end_date,
       approved_start_date, approved_end_date } = req.body || {};
+    if (title !== undefined && !String(title).trim()) return res.status(422).json({ error: 'title cannot be empty' });
 
     const dateErrors = [
       validateDateRange(company_start_date, company_end_date, 'Company'),
@@ -98,6 +113,10 @@ router.put('/:milestoneId', requireAuth, requireAdmin, resolveProjectScope, asyn
       validateDateRange(approved_start_date, approved_end_date, 'Approved'),
     ].filter(Boolean);
     if (dateErrors.length) return res.status(422).json({ error: dateErrors[0] });
+    const startError = validateAgainstProjectStart(req.project, {
+      company_start_date, partner_start_date, approved_start_date,
+    });
+    if (startError) return res.status(422).json({ error: startError });
 
     const result = await query(
       `UPDATE milestones SET
@@ -149,19 +168,22 @@ router.post('/:milestoneId/complete', requireAuth, requireAdmin, resolveProjectS
       if (!delay_side || !['company', 'partner'].includes(delay_side)) {
         return res.status(422).json({ error: 'delay_side ("company" or "partner") is required when on_time is false' });
       }
+      if (typeof delay_reason !== 'string' || !delay_reason.trim()) {
+        return res.status(422).json({ error: 'A delay reason is required when the milestone is completed late' });
+      }
     }
 
     const result = await query(
       `UPDATE milestones SET status='completed', completed_at=NOW(),
          on_time=$1, delay_side=$2, delay_reason=$3, updated_at=NOW()
        WHERE id=$4 RETURNING *`,
-      [on_time, !on_time ? delay_side : null, !on_time ? (delay_reason || null) : null, req.params.milestoneId]
+      [on_time, !on_time ? delay_side : null, !on_time ? delay_reason.trim() : null, req.params.milestoneId]
     );
 
     if (!on_time) {
       await query(
         `INSERT INTO delays (milestone_id, status, side, reason) VALUES ($1,'pending',$2,$3)`,
-        [req.params.milestoneId, delay_side, delay_reason || null]
+        [req.params.milestoneId, delay_side, delay_reason.trim()]
       );
     }
 
@@ -185,11 +207,19 @@ router.post('/:milestoneId/submit-approval', requireAuth, requireAdmin, resolveP
     const { ok, reason } = canSubmitForApproval(msRes.rows[0], apRes.rows[0] || null, pocRes.rows[0].cnt);
     if (!ok) return res.status(422).json({ error: reason });
 
-    const result = await query(
-      `INSERT INTO approvals (milestone_id, status, submitted_at, submitted_by) VALUES ($1,'pending',NOW(),$2) RETURNING *`,
-      [req.params.milestoneId, req.person.id]
-    );
-    await auditLog({ query }, { eventType: 'approval_submitted', entityType: 'approvals', entityId: result.rows[0].id, actorId: req.person.id, actorRole: req.person.role });
+    const resubmit = apRes.rows[0]?.status === 'rejected';
+    const result = resubmit
+      ? await query(
+          `UPDATE approvals SET status='pending', submitted_at=NOW(), submitted_by=$2,
+             rejected_at=NULL, rejected_by=NULL, rejection_reason=NULL, updated_at=NOW()
+           WHERE milestone_id=$1 RETURNING *`,
+          [req.params.milestoneId, req.person.id]
+        )
+      : await query(
+          `INSERT INTO approvals (milestone_id, status, submitted_at, submitted_by) VALUES ($1,'pending',NOW(),$2) RETURNING *`,
+          [req.params.milestoneId, req.person.id]
+        );
+    await auditLog({ query }, { eventType: resubmit ? 'approval_resubmitted' : 'approval_submitted', entityType: 'approvals', entityId: result.rows[0].id, actorId: req.person.id, actorRole: req.person.role });
     res.status(201).json(result.rows[0]);
   } catch (err) {
     console.error(err);

@@ -72,7 +72,7 @@ export function canSubmitForApproval(milestone, existingApproval, pocCount) {
   if (pocCount === 0) {
     return { ok: false, reason: 'No Partner POC assigned to this project' };
   }
-  if (existingApproval) {
+  if (existingApproval && existingApproval.status !== 'rejected') {
     return { ok: false, reason: 'Already submitted for approval' };
   }
   return { ok: true };
@@ -89,6 +89,26 @@ export function canApprove(approval, pendingDelayCount, isPOCOnProject) {
   }
   if (pendingDelayCount > 0) {
     return { ok: false, reason: `${pendingDelayCount} delay(s) not yet accepted` };
+  }
+  return { ok: true };
+}
+
+export function canRejectApproval(approval, isPOCOnProject) {
+  if (!approval || approval.status !== 'pending') {
+    return { ok: false, reason: 'No pending approval to deny' };
+  }
+  if (!isPOCOnProject) {
+    return { ok: false, reason: 'Not authorised' };
+  }
+  return { ok: true };
+}
+
+export function canOverrideApproval(approval, person) {
+  if (person.role !== 'admin') {
+    return { ok: false, reason: 'Only an admin can override an approval' };
+  }
+  if (!approval || approval.status === 'approved') {
+    return { ok: false, reason: approval ? 'Already approved' : 'No approval to override' };
   }
   return { ok: true };
 }

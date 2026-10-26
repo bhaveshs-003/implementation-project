@@ -43,6 +43,7 @@ router.put('/:subtaskId', requireAuth, requireAdmin, resolveProjectScope, async 
     if (!st) return res.status(404).json({ error: 'Sub-task not found' });
 
     const { title, order_index } = req.body || {};
+    if (title !== undefined && !String(title).trim()) return res.status(422).json({ error: 'title cannot be empty' });
     const result = await query(
       `UPDATE sub_tasks SET title=COALESCE($1,title), order_index=COALESCE($2,order_index), updated_at=NOW() WHERE id=$3 RETURNING *`,
       [title, order_index, req.params.subtaskId]

@@ -580,3 +580,39 @@ h1, h2, h3, h4 { letter-spacing: -0.015em; color: var(--text); }
 .strength-checks li.met { color: var(--success); }
 .strength-checks svg { width: 13px; height: 13px; flex-shrink: 0; }
 @media (max-width: 520px) { .strength-checks { grid-template-columns: 1fr; } }
+
+/* ── Accordion (project form) ──────────────────────────────────────────────── */
+.accordion-toggle {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 0;
+  background: none; border: 0; border-top: 1px solid var(--border); cursor: pointer;
+  font: inherit; font-weight: 600; color: var(--text); text-align: left;
+}
+.accordion-toggle svg { width: 16px; height: 16px; transition: transform 0.15s var(--ease); transform: rotate(-90deg); }
+.accordion-toggle[aria-expanded="true"] svg { transform: rotate(0); }
+.accordion-body { padding-top: 4px; }
+
+/* ── Milestone card states ─────────────────────────────────────────────────── */
+.card-clickable { cursor: pointer; transition: box-shadow 0.15s var(--ease), border-color 0.15s var(--ease); }
+.card-clickable:hover { box-shadow: var(--shadow-md); }
+.card-ms-ontime  { border-color: #86efac; }
+.card-ms-ontime  > .card-header { background: var(--success-soft); border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+.card-ms-delayed { border-color: #fca5a5; }
+.card-ms-delayed > .card-header { background: var(--danger-soft); border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+.card-ms-pending { border-color: #a5b4fc; box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12), var(--shadow-sm); }
+.card-ms-pending > .card-header { background: var(--primary-soft); border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+
+/* ── Side drawer (milestone comments) ──────────────────────────────────────── */
+.drawer-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.35); z-index: 900; animation: pd-overlay-in 0.15s var(--ease); }
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 910; width: min(560px, 100vw);
+  background: var(--surface); box-shadow: var(--shadow-lg); display: flex; flex-direction: column;
+  animation: pd-drawer-in 0.22s var(--ease);
+}
+@keyframes pd-drawer-in { from { transform: translateX(100%); } to { transform: none; } }
+.drawer-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 20px 24px; border-bottom: 1px solid var(--border); }
+.drawer-title { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.drawer-body { flex: 1; overflow-y: auto; padding: 20px 24px; background: var(--bg); }
+.drawer-section { margin-bottom: 24px; }
+.drawer-section-title { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--text-2); margin-bottom: 10px; }
+.card-ms-rejected { border-color: var(--danger); box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12), var(--shadow-sm); }
+.card-ms-rejected > .card-header { background: var(--danger-soft); border-radius: var(--radius-lg) var(--radius-lg) 0 0; }

@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { query } from '../db/pool.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { resolveProjectScope } from '../middleware/scope.js';
-import { canApprove, auditLog } from '../rules/rules.js';
+import { canApprove, canRejectApproval, canOverrideApproval, auditLog } from '../rules/rules.js';
 
 const router = Router({ mergeParams: true });
 
@@ -108,6 +108,90 @@ router.post('/approve', requireAuth, resolveProjectScope, async (req, res) => {
     return res.json(safeApproval);
   } catch (err) {
     console.error('POST /approve error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+async function isPocOnProject(projectId, personId) {
+  const r = await query(
+    "SELECT COUNT(*)::int AS n FROM project_assignments WHERE project_id = $1 AND person_id = $2 AND assignment_role = 'poc'",
+    [projectId, personId]
+  );
+  return r.rows[0].n > 0;
+}
+
+async function loadApproval(milestoneId, projectId) {
+  const r = await query(
+    `SELECT a.* FROM approvals a JOIN milestones m ON m.id = a.milestone_id
+     WHERE a.milestone_id = $1 AND m.project_id = $2`,
+    [milestoneId, projectId]
+  );
+  return r.rows[0] || null;
+}
+
+// POST /reject  (partner POC denies the approval, even when the milestone was on time)
+router.post('/reject', requireAuth, resolveProjectScope, async (req, res) => {
+  try {
+    const { projectId, milestoneId } = req.params;
+    if (req.person.role !== 'partner_poc') return res.status(404).json({ error: 'Not found' });
+
+    const approval = await loadApproval(milestoneId, projectId);
+    if (!approval) return res.status(404).json({ error: 'Approval record not found' });
+
+    const rule = canRejectApproval(approval, await isPocOnProject(projectId, req.person.id));
+    if (!rule.ok) return res.status(422).json({ error: rule.reason });
+
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+    if (!reason) return res.status(422).json({ error: 'A reason is required to deny an approval' });
+
+    const updated = await query(
+      `UPDATE approvals SET status = 'rejected', rejected_at = NOW(), rejected_by = $1,
+         rejection_reason = $2, updated_at = NOW()
+       WHERE id = $3 AND status = 'pending' RETURNING *`,
+      [req.person.id, reason, approval.id]
+    );
+    if (!updated.rows.length) return res.status(422).json({ error: 'This approval was just actioned by someone else.' });
+
+    await auditLog({ query }, {
+      eventType: 'approval_rejected', entityType: 'approvals', entityId: approval.id,
+      actorId: req.person.id, actorRole: req.person.role, meta: { reason },
+    });
+    const { rating: _r, comment: _c, ...safe } = { ...updated.rows[0], rejected_by_name: req.person.name };
+    return res.json(safe);
+  } catch (err) {
+    console.error('POST /reject error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /override  (admin approves on the partner's behalf, e.g. after a denial or no response)
+router.post('/override', requireAuth, requireAdmin, resolveProjectScope, async (req, res) => {
+  try {
+    const { projectId, milestoneId } = req.params;
+    const approval = await loadApproval(milestoneId, projectId);
+
+    const rule = canOverrideApproval(approval, req.person);
+    if (!rule.ok) return res.status(422).json({ error: rule.reason });
+
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+    if (reason.length < 5) return res.status(422).json({ error: 'A reason of at least 5 characters is required to override' });
+
+    const updated = await query(
+      `UPDATE approvals SET status = 'approved', approved_at = NOW(), approved_by = $1,
+         overridden_by = $1, override_reason = $2, updated_at = NOW()
+       WHERE id = $3 AND status <> 'approved' RETURNING *`,
+      [req.person.id, reason, approval.id]
+    );
+    if (!updated.rows.length) return res.status(422).json({ error: 'Already approved' });
+
+    await auditLog({ query }, {
+      eventType: 'approval_overridden', entityType: 'approvals', entityId: approval.id,
+      actorId: req.person.id, actorRole: req.person.role,
+      oldValues: { status: approval.status }, meta: { reason },
+    });
+    return res.json({ ...updated.rows[0], approved_by_name: req.person.name });
+  } catch (err) {
+    console.error('POST /override error:', err);
     return res.status(500).json({ error: 'Internal server error' });
   }
 });

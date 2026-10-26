@@ -13,6 +13,22 @@ const STATUS_ORDER = ['not_started', 'in_progress', 'completed'];
 function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : '—'; }
 function fmtRange(s, e) { return (s || e) ? `${fmtDate(s)} – ${fmtDate(e)}` : '—'; }
 
+const MS_PER_DAY = 86400000;
+function localDayKey(d) {
+  const x = new Date(d);
+  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+}
+function dayNumber(key) {
+  const [y, m, d] = key.split('-').map(Number);
+  return Date.UTC(y, m - 1, d) / MS_PER_DAY;
+}
+// Positive = days after the due date, 0 = on the day, negative = days early.
+function daysOver(actual, due) {
+  if (!actual || !due) return null;
+  return dayNumber(localDayKey(actual)) - dayNumber(String(due).slice(0, 10));
+}
+function plural(n) { return `${n} day${n === 1 ? '' : 's'}`; }
+
 // ── Small presentational helpers (module-level) ─────────────────────────────
 function ModalError({ message }) {
   if (!message) return null;
@@ -30,6 +46,7 @@ function StatTile({ label, value, icon, tone = 'primary', sub }) {
     success: { background: 'var(--success-soft)', color: 'var(--success)' },
     info: { background: 'var(--info-soft)', color: 'var(--info)' },
     violet: { background: 'var(--violet-soft)', color: 'var(--violet)' },
+    danger: { background: 'var(--danger-soft)', color: 'var(--danger)' },
   };
   return (
     <div className="card stat">
@@ -242,8 +259,46 @@ function AssignModal({ role, eligible, onSave, onClose, saving }) {
   );
 }
 
+// ── ApprovalActions — partner approve/deny, admin override/resubmit ─────────
+function ApprovalActions({ ms, isAdmin, openModal, actions, busy, pendingDelays = 0 }) {
+  const status = ms.approval?.status;
+  if (!status) return null;
+
+  if (!isAdmin) {
+    if (status !== 'pending') return null;
+    return (
+      <>
+        <button className="btn btn-danger btn-sm" onClick={() => openModal('reject-approval', { milestoneId: ms.id })}>
+          <Icon name="x" />
+          Deny
+        </button>
+        <button className="btn btn-success btn-sm" onClick={() => openModal('approve', { milestoneId: ms.id })}>
+          <Icon name="check" />
+          {pendingDelays > 0 ? 'Review & Approve' : 'Approve'}
+        </button>
+      </>
+    );
+  }
+
+  if (status === 'approved') return null;
+  return (
+    <>
+      {status === 'rejected' && (
+        <button className="btn btn-soft btn-sm" onClick={() => actions.submitApproval(ms)} disabled={busy[`approval-${ms.id}`]}>
+          <Icon name="send" />
+          {busy[`approval-${ms.id}`] ? 'Submitting…' : 'Resubmit for Approval'}
+        </button>
+      )}
+      <button className="btn btn-secondary btn-sm" onClick={() => openModal('override-approval', { milestoneId: ms.id })}>
+        <Icon name="check" />
+        Override &amp; Approve
+      </button>
+    </>
+  );
+}
+
 // ── MilestoneCard — module-level to prevent focus loss ──────────────────────
-function MilestoneCard({ ms, project, isAdmin, openModal, actions, busy, onReviewDelays }) {
+function MilestoneCard({ ms, project, isAdmin, openModal, actions, busy, onOpenComments }) {
   const openSubtasks = (ms.sub_tasks || []).filter(st => st.status !== 'completed');
   const pendingDelays = (ms.delays || []).filter(d => d.status !== 'accepted').length;
   const awaitingPartner = !isAdmin && ms.approval?.status === 'pending';
@@ -251,9 +306,27 @@ function MilestoneCard({ ms, project, isAdmin, openModal, actions, busy, onRevie
   const doneSubtasks = subTasks.length - openSubtasks.length;
   const isApproved = ms.approval?.status === 'approved';
   const awaitingSubmission = isAdmin && ms.status === 'completed' && !ms.approval;
+  const approvalPending = ms.approval?.status === 'pending';
+  const approvalRejected = ms.approval?.status === 'rejected';
+  const completedLate = ms.status === 'completed' && ms.on_time === false;
+  const completedOnTime = ms.status === 'completed' && !completedLate;
+  const commentCount = (ms.delays || []).length;
+  const stateClass = approvalRejected ? ' card-ms-rejected'
+    : approvalPending ? ' card-ms-pending'
+    : completedLate ? ' card-ms-delayed'
+    : completedOnTime ? ' card-ms-ontime'
+    : '';
+
+  const handleCardClick = (e) => {
+    if (e.target.closest('button, a, input, textarea, select, label')) return;
+    onOpenComments(ms.id);
+  };
 
   return (
-    <div className={`card mb-16${awaitingSubmission ? ' card-attention' : ''}`}>
+    <div
+      className={`card mb-16 card-clickable${stateClass}${awaitingSubmission ? ' card-attention' : ''}`}
+      onClick={handleCardClick}
+    >
       <div className="card-header" style={{ alignItems: 'flex-start', flexWrap: 'wrap' }}>
         <div className="row" style={{ alignItems: 'flex-start', gap: 12, minWidth: 0, flex: 1 }}>
           <span className="stat-icon" style={{
@@ -268,6 +341,10 @@ function MilestoneCard({ ms, project, isAdmin, openModal, actions, busy, onRevie
               <span className="card-title">{ms.title}</span>
               <StatusBadge status={ms.status} />
               {awaitingSubmission && <span className="badge badge-warning">Ready to submit for approval</span>}
+              {approvalPending && <span className="badge badge-violet">Pending approval</span>}
+              {approvalRejected && <span className="badge badge-danger">Approval denied</span>}
+              {completedLate && <span className="badge badge-danger">Completed with delay</span>}
+              {completedOnTime && <span className="badge badge-success">Completed on time</span>}
             </div>
             <div className="row wrap text-sm muted" style={{ gap: 12, marginTop: 4 }}>
               {ms.approved_start_date && (
@@ -286,6 +363,25 @@ function MilestoneCard({ ms, project, isAdmin, openModal, actions, busy, onRevie
           </div>
         </div>
         <div className="row wrap">
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => onOpenComments(ms.id)}
+            title="Open comments and conversation"
+          >
+            <Icon name="message" />
+            Comments{commentCount > 0 ? ` (${commentCount})` : ''}
+          </button>
+          {isAdmin && (
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => openModal('edit-milestone', { milestoneId: ms.id })}
+              title="Edit milestone and sub-task names"
+            >
+              <Icon name="edit" />
+              Edit
+            </button>
+          )}
           {isAdmin && ms.status !== 'completed' && (
             <button
               className="btn btn-secondary btn-sm"
@@ -307,15 +403,7 @@ function MilestoneCard({ ms, project, isAdmin, openModal, actions, busy, onRevie
               {busy[`approval-${ms.id}`] ? 'Submitting…' : 'Submit for Approval'}
             </button>
           )}
-          {awaitingPartner && (
-            <button
-              className="btn btn-success btn-sm"
-              onClick={() => openModal('approve', { milestoneId: ms.id })}
-            >
-              <Icon name="check" />
-              {pendingDelays > 0 ? 'Review & Approve' : 'Approve'}
-            </button>
-          )}
+          <ApprovalActions ms={ms} isAdmin={isAdmin} openModal={openModal} actions={actions} busy={busy} pendingDelays={pendingDelays} />
           {!isAdmin && !ms.approval && (
             <span className="badge">Not yet submitted for approval</span>
           )}
@@ -329,16 +417,24 @@ function MilestoneCard({ ms, project, isAdmin, openModal, actions, busy, onRevie
               <Icon name="alertTriangle" />
               {pendingDelays} delay{pendingDelays !== 1 ? 's need' : ' needs'} your decision before this milestone can be approved.
             </span>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={onReviewDelays}>Review delays</button>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => onOpenComments(ms.id)}>Review delays</button>
           </div>
         )}
         {ms.approval && (
-          <div className={`alert ${isApproved ? 'alert-success' : 'alert-warning'}`} style={{ marginBottom: subTasks.length > 0 || (isAdmin && ms.status !== 'completed') ? 14 : 0 }}>
-            <Icon name={isApproved ? 'checkCircle' : 'clock'} />
+          <div
+            className={`alert ${isApproved ? 'alert-success' : approvalRejected ? 'alert-error' : 'alert-warning'}`}
+            style={{ marginBottom: subTasks.length > 0 || (isAdmin && ms.status !== 'completed') ? 14 : 0 }}
+          >
+            <Icon name={isApproved ? 'checkCircle' : approvalRejected ? 'alert' : 'clock'} />
             <div className="row wrap" style={{ gap: 6 }}>
               <span>Approval:</span>
-              <strong style={{ textTransform: 'capitalize' }}>{ms.approval.status}</strong>
-              {isApproved && ms.approval.approved_by_name && <span>by {ms.approval.approved_by_name}</span>}
+              <strong>{approvalRejected ? 'Denied' : ms.approval.status.charAt(0).toUpperCase() + ms.approval.status.slice(1)}</strong>
+              {isApproved && ms.approval.overridden_by
+                ? <span>by admin override{ms.approval.approved_by_name ? ` (${ms.approval.approved_by_name})` : ''}{ms.approval.override_reason ? ` — "${ms.approval.override_reason}"` : ''}</span>
+                : isApproved && ms.approval.approved_by_name && <span>by {ms.approval.approved_by_name}</span>}
+              {approvalRejected && (
+                <span>{ms.approval.rejected_by_name ? `by ${ms.approval.rejected_by_name} ` : ''}— "{ms.approval.rejection_reason}"</span>
+              )}
               {isAdmin && ms.approval.rating && (
                 <span className="row" style={{ gap: 4 }}>
                   · <Icon name="star" size={13} /> {ms.approval.rating}/5
@@ -410,10 +506,20 @@ function MilestoneCard({ ms, project, isAdmin, openModal, actions, busy, onRevie
 }
 
 // ── MilestonesTab — module-level ────────────────────────────────────────────
-function MilestonesTab({ milestones, project, assignments, isAdmin, projectId, modal, form, handleField, modalError, saving, openModal, closeModal, doSave, actions, busy, onReviewDelays }) {
+function MilestonesTab({ milestones, project, assignments, isAdmin, projectId, modal, form, handleField, modalError, saving, openModal, closeModal, doSave, actions, busy, onOpenComments }) {
   const approvingMs = modal?.type === 'approve' ? milestones.find(m => m.id === modal.milestoneId) : null;
   const blockingDelays = (approvingMs?.delays || []).filter(d => d.status !== 'accepted');
   const doneMs = milestones.filter(m => m.status === 'completed').length;
+
+  const projectStartKey = project.approved_start_date ? String(project.approved_start_date).slice(0, 10) : null;
+  const msDateError = (() => {
+    const { approved_start_date: start, approved_end_date: end } = form || {};
+    if (projectStartKey && start && start < projectStartKey) {
+      return `Milestone start date cannot be earlier than the project's approved start date (${fmtDate(projectStartKey)}).`;
+    }
+    if (start && end && end < start) return 'End date cannot be before the start date.';
+    return null;
+  })();
 
   return (
     <div>
@@ -457,7 +563,7 @@ function MilestonesTab({ milestones, project, assignments, isAdmin, projectId, m
       )}
 
       {milestones.map(ms => (
-        <MilestoneCard key={ms.id} ms={ms} project={project} isAdmin={isAdmin} openModal={openModal} actions={actions} busy={busy} onReviewDelays={onReviewDelays} />
+        <MilestoneCard key={ms.id} ms={ms} project={project} isAdmin={isAdmin} openModal={openModal} actions={actions} busy={busy} onOpenComments={onOpenComments} />
       ))}
 
       {/* Add Milestone Modal */}
@@ -472,7 +578,7 @@ function MilestonesTab({ milestones, project, assignments, isAdmin, projectId, m
               <button
                 className="btn btn-primary"
                 onClick={() => doSave(() => apiFetch(`/api/projects/${projectId}/milestones`, { method: 'POST', body: form }), { apply: actions.milestoneAdded })}
-                disabled={!form.title || saving}
+                disabled={!form.title || saving || !!msDateError}
               >
                 {saving ? 'Saving...' : 'Add Milestone'}
               </button>
@@ -498,6 +604,8 @@ function MilestonesTab({ milestones, project, assignments, isAdmin, projectId, m
                 type="date"
                 className="input"
                 value={form.approved_start_date || ''}
+                min={project.approved_start_date ? String(project.approved_start_date).slice(0, 10) : undefined}
+                max={form.approved_end_date || undefined}
                 onChange={e => handleField('approved_start_date', e.target.value)}
               />
             </div>
@@ -508,10 +616,12 @@ function MilestonesTab({ milestones, project, assignments, isAdmin, projectId, m
                 type="date"
                 className="input"
                 value={form.approved_end_date || ''}
+                min={form.approved_start_date || (project.approved_start_date ? String(project.approved_start_date).slice(0, 10) : undefined)}
                 onChange={e => handleField('approved_end_date', e.target.value)}
               />
             </div>
           </div>
+          {msDateError && <div className="alert alert-error" role="alert"><Icon name="alert" />{msDateError}</div>}
           <ModalError message={modalError} />
         </Modal>
       )}
@@ -544,7 +654,7 @@ function MilestonesTab({ milestones, project, assignments, isAdmin, projectId, m
                       return completed;
                     }, { apply: actions.milestoneUpdated });
                   }}
-                  disabled={!form.on_time || (form.on_time === 'false' && !form.delay_side) || saving}
+                  disabled={!form.on_time || (form.on_time === 'false' && (!form.delay_side || !form.delay_reason?.trim())) || saving}
                 >
                   {saving ? 'Saving...' : shouldSubmit ? 'Mark Complete & Submit' : 'Mark Complete'}
                 </button>
@@ -573,7 +683,7 @@ function MilestonesTab({ milestones, project, assignments, isAdmin, projectId, m
                   </select>
                 </div>
                 <div className="field">
-                  <label className="label" htmlFor="delay-reason">Delay reason</label>
+                  <label className="label" htmlFor="delay-reason">Delay reason *</label>
                   <textarea id="delay-reason" className="textarea" value={form.delay_reason || ''} onChange={e => handleField('delay_reason', e.target.value)}
                     rows={3} />
                   <div className="help">This opens a delay thread the other side can accept or dispute.</div>
@@ -638,7 +748,7 @@ function MilestonesTab({ milestones, project, assignments, isAdmin, projectId, m
                     </li>
                   ))}
                 </ul>
-                <button type="button" className="btn btn-secondary btn-sm" onClick={() => { closeModal(); onReviewDelays(); }}>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => { closeModal(); onOpenComments(approvingMs.id); }}>
                   Review delays
                 </button>
               </div>
@@ -676,8 +786,106 @@ function MilestonesTab({ milestones, project, assignments, isAdmin, projectId, m
         </Modal>
       )}
 
+      {/* Deny Approval Modal (partner) */}
+      {modal?.type === 'reject-approval' && (() => {
+        const ms = milestones.find(m => m.id === modal.milestoneId);
+        return (
+          <Modal
+            title="Deny Approval"
+            subtitle={ms?.title}
+            onClose={closeModal}
+            footer={
+              <>
+                <button className="btn btn-secondary" onClick={closeModal}>Cancel</button>
+                <button
+                  className="btn btn-danger"
+                  onClick={() => doSave(() => apiFetch(`/api/projects/${projectId}/milestones/${modal.milestoneId}/approval/reject`, {
+                    method: 'POST', body: { reason: form.reason },
+                  }), { apply: actions.approvalUpdated })}
+                  disabled={!form.reason?.trim() || saving}
+                >
+                  {saving ? 'Denying...' : 'Deny Approval'}
+                </button>
+              </>
+            }
+          >
+            <div className="alert alert-warning">
+              <Icon name="alertTriangle" />
+              <span>The admin is notified and can address your concern and resubmit this milestone for approval.</span>
+            </div>
+            <div className="field" style={{ marginBottom: 0 }}>
+              <span className="label">Reason * <span className="label-hint">(type @ to mention anyone on the project)</span></span>
+              <MentionInput
+                value={form.reason || ''}
+                onChange={v => handleField('reason', v)}
+                placeholder="Explain why this milestone is not approved…"
+                resources={assignments}
+                multiline
+                rows={4}
+              />
+            </div>
+            <ModalError message={modalError} />
+          </Modal>
+        );
+      })()}
+
+      {/* Override Approval Modal (admin) */}
+      {modal?.type === 'override-approval' && (() => {
+        const ms = milestones.find(m => m.id === modal.milestoneId);
+        return (
+          <Modal
+            title="Override Approval"
+            subtitle={ms?.title}
+            onClose={closeModal}
+            footer={
+              <>
+                <button className="btn btn-secondary" onClick={closeModal}>Cancel</button>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => doSave(() => apiFetch(`/api/projects/${projectId}/milestones/${modal.milestoneId}/approval/override`, {
+                    method: 'POST', body: { reason: form.reason },
+                  }), { apply: actions.approvalUpdated })}
+                  disabled={(form.reason || '').trim().length < 5 || saving}
+                >
+                  {saving ? 'Approving...' : 'Override & Approve'}
+                </button>
+              </>
+            }
+          >
+            <div className="alert alert-warning">
+              <Icon name="alertTriangle" />
+              <span>
+                This approves the milestone on the partner's behalf
+                {ms?.approval?.status === 'rejected' ? ', overriding their denial' : ''}. It is recorded in the audit trail and shown to the partner.
+              </span>
+            </div>
+            <div className="field" style={{ marginBottom: 0 }}>
+              <label className="label" htmlFor="override-reason">Reason for override * <span className="label-hint">(min 5 characters)</span></label>
+              <textarea
+                id="override-reason"
+                className="textarea"
+                rows={4}
+                value={form.reason || ''}
+                onChange={e => handleField('reason', e.target.value)}
+                placeholder="Why is this milestone being approved without the partner?"
+                autoFocus
+              />
+            </div>
+            <ModalError message={modalError} />
+          </Modal>
+        );
+      })()}
+
       {/* Add Sub-task Modal */}
-      {modal?.type === 'add-subtask' && (
+      {modal?.type === 'add-subtask' && (() => {
+        const submitSubtask = () => {
+          if (!form.title?.trim() || saving) return;
+          doSave(
+            () => apiFetch(`/api/projects/${projectId}/milestones/${modal.milestoneId}/subtasks`, { method: 'POST', body: { title: form.title.trim() } }),
+            { apply: actions.subtaskAdded },
+          );
+        };
+        return (
         <Modal
           title="Add Sub-task"
           onClose={closeModal}
@@ -686,8 +894,8 @@ function MilestonesTab({ milestones, project, assignments, isAdmin, projectId, m
               <button className="btn btn-secondary" onClick={closeModal}>Cancel</button>
               <button
                 className="btn btn-primary"
-                onClick={() => doSave(() => apiFetch(`/api/projects/${projectId}/milestones/${modal.milestoneId}/subtasks`, { method: 'POST', body: { title: form.title } }), { apply: actions.subtaskAdded })}
-                disabled={!form.title || saving}
+                onClick={submitSubtask}
+                disabled={!form.title?.trim() || saving}
               >
                 {saving ? 'Adding...' : 'Add'}
               </button>
@@ -702,12 +910,88 @@ function MilestonesTab({ milestones, project, assignments, isAdmin, projectId, m
               placeholder="Sub-task title"
               value={form.title || ''}
               onChange={e => handleField('title', e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); submitSubtask(); } }}
               autoFocus
             />
           </div>
           <ModalError message={modalError} />
         </Modal>
-      )}
+        );
+      })()}
+
+      {/* Edit Milestone + Sub-task names Modal */}
+      {modal?.type === 'edit-milestone' && (() => {
+        const ms = milestones.find(m => m.id === modal.milestoneId);
+        if (!ms) return null;
+        const subs = ms.sub_tasks || [];
+        const msTitle = form.title ?? ms.title;
+        const subTitle = (st) => form.st?.[st.id] ?? st.title;
+        const setSubTitle = (id, v) => handleField('st', { ...(form.st || {}), [id]: v });
+        const invalid = !msTitle.trim() || subs.some(st => !subTitle(st).trim());
+        const save = () => {
+          if (invalid || saving) return;
+          doSave(async () => {
+            let row = ms;
+            if (msTitle.trim() !== ms.title) {
+              row = { ...ms, ...(await apiFetch(`/api/projects/${projectId}/milestones/${ms.id}`, { method: 'PUT', body: { title: msTitle.trim() } })) };
+            }
+            const updatedSubs = [];
+            for (const st of subs) {
+              const next = subTitle(st).trim();
+              if (next !== st.title) {
+                updatedSubs.push(await apiFetch(`/api/projects/${projectId}/milestones/${ms.id}/subtasks/${st.id}`, { method: 'PUT', body: { title: next } }));
+              } else {
+                updatedSubs.push(st);
+              }
+            }
+            return { id: ms.id, title: row.title, sub_tasks: updatedSubs };
+          }, { apply: actions.milestoneUpdated });
+        };
+        return (
+          <Modal
+            title="Edit Milestone"
+            subtitle="Rename the milestone and its sub-tasks."
+            onClose={closeModal}
+            footer={
+              <>
+                <button className="btn btn-secondary" onClick={closeModal}>Cancel</button>
+                <button className="btn btn-primary" onClick={save} disabled={invalid || saving}>
+                  {saving ? 'Saving...' : 'Save Changes'}
+                </button>
+              </>
+            }
+          >
+            <div className="field">
+              <label className="label" htmlFor="edit-ms-title">Milestone name *</label>
+              <input
+                id="edit-ms-title"
+                className="input"
+                value={msTitle}
+                onChange={e => handleField('title', e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); save(); } }}
+                autoFocus
+              />
+            </div>
+            {subs.length > 0 && (
+              <div className="field" style={{ marginBottom: 0 }}>
+                <label className="label">Sub-tasks</label>
+                {subs.map((st, i) => (
+                  <input
+                    key={st.id}
+                    className="input"
+                    style={{ marginBottom: 8 }}
+                    aria-label={`Sub-task ${i + 1} name`}
+                    value={subTitle(st)}
+                    onChange={e => setSubTitle(st.id, e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); save(); } }}
+                  />
+                ))}
+              </div>
+            )}
+            <ModalError message={modalError} />
+          </Modal>
+        );
+      })()}
     </div>
   );
 }
@@ -887,39 +1171,99 @@ function DelayThread({ delay, isAdmin, projectId, resources, onChanged }) {
   );
 }
 
-// ── CommentsTab — module-level ───────────────────────────────────────────────
-function CommentsTab({ delays, milestones, isAdmin, projectId, resources, onChanged }) {
-  const grouped = {};
-  delays.forEach(group => {
-    if (Array.isArray(group.delays)) {
-      group.delays.forEach(d => { (grouped[d.milestone_id] ||= []).push(d); });
-    }
-  });
+// ── MilestoneCommentsDrawer — side panel with the full conversation ──────────
+function MilestoneCommentsDrawer({ milestone, delays, isAdmin, projectId, resources, onChanged, onClose, openModal, actions, busy }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const threads = delays.flatMap(g => (Array.isArray(g.delays) ? g.delays : [])).filter(d => d.milestone_id === milestone.id);
+  const milestoneThreads = threads.filter(d => !d.sub_task_id);
+  const subTasks = milestone.sub_tasks || [];
+  const subTaskGroups = subTasks
+    .map(st => ({ st, threads: threads.filter(d => d.sub_task_id === st.id) }))
+    .filter(g => g.threads.length > 0);
+  const approval = milestone.approval;
+  const total = threads.length + (approval ? 1 : 0);
+
+  const renderThreads = (list) => list.map(d => (
+    <DelayThread key={d.id} delay={d} isAdmin={isAdmin} projectId={projectId} resources={resources} onChanged={onChanged} />
+  ));
 
   return (
-    <div>
-      {Object.keys(grouped).length === 0 && (
-        <div className="card">
-          <div className="empty">
-            <div className="empty-icon"><Icon name="message" /></div>
-            <div className="empty-title">No delay threads</div>
-            <div className="empty-text">Delay threads are created when a milestone is marked as completed late.</div>
+    <>
+      <div className="drawer-backdrop" onMouseDown={onClose} />
+      <aside className="drawer" role="dialog" aria-modal="true" aria-label={`Comments for ${milestone.title}`}>
+        <div className="drawer-header">
+          <div style={{ minWidth: 0 }}>
+            <div className="drawer-title">{milestone.title}</div>
+            <div className="row wrap" style={{ gap: 8, marginTop: 6 }}>
+              <StatusBadge status={milestone.status} />
+              <span className="text-xs subtle">{subTasks.length} sub-task{subTasks.length === 1 ? '' : 's'}</span>
+            </div>
           </div>
+          <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose} aria-label="Close comments">
+            <Icon name="x" />
+          </button>
         </div>
-      )}
-      {milestones.filter(m => grouped[m.id]).map(m => (
-        <div key={m.id} className="mb-24">
-          <div className="row mb-8" style={{ gap: 8 }}>
-            <Icon name="flag" size={14} style={{ color: 'var(--text-3)' }} />
-            <h4 className="text-sm fw-600" style={{ color: 'var(--text-2)' }}>{m.title}</h4>
-            <span className="tab-count">{grouped[m.id].length}</span>
-          </div>
-          {grouped[m.id].map(delay => (
-            <DelayThread key={delay.id} delay={delay} isAdmin={isAdmin} projectId={projectId} resources={resources} onChanged={onChanged} />
+
+        <div className="drawer-body">
+          {total === 0 && (
+            <div className="empty">
+              <div className="empty-icon"><Icon name="message" /></div>
+              <div className="empty-title">No comments yet</div>
+              <div className="empty-text">Delay discussions and approval notes for this milestone and its sub-tasks will appear here.</div>
+            </div>
+          )}
+
+          {milestoneThreads.length > 0 && (
+            <section className="drawer-section">
+              <h4 className="drawer-section-title"><Icon name="flag" size={14} /> Milestone</h4>
+              {renderThreads(milestoneThreads)}
+            </section>
+          )}
+
+          {subTaskGroups.map(({ st, threads: list }) => (
+            <section key={st.id} className="drawer-section">
+              <h4 className="drawer-section-title"><Icon name="checkCircle" size={14} /> Sub-task: {st.title}</h4>
+              {renderThreads(list)}
+            </section>
           ))}
+
+          {approval && (
+            <section className="drawer-section">
+              <h4 className="drawer-section-title"><Icon name="send" size={14} /> Approval</h4>
+              <div className="message">
+                <div className="message-meta row" style={{ gap: 6 }}>
+                  <span className="fw-600" style={{ color: 'var(--text-2)', textTransform: 'capitalize' }}>{approval.status}</span>
+                  {approval.submitted_at && <span>· submitted {fmtDate(approval.submitted_at)}</span>}
+                  {approval.approved_at && <span>· approved {fmtDate(approval.approved_at)}{approval.approved_by_name ? ` by ${approval.approved_by_name}` : ''}</span>}
+                </div>
+                {approval.status === 'rejected' && (
+                  <div className="text-sm" style={{ color: 'var(--danger)' }}>
+                    Denied{approval.rejected_by_name ? ` by ${approval.rejected_by_name}` : ''}{approval.rejected_at ? ` on ${fmtDate(approval.rejected_at)}` : ''}: {approval.rejection_reason}
+                  </div>
+                )}
+                {approval.overridden_by && (
+                  <div className="text-sm">Approved by admin override{approval.override_reason ? `: ${approval.override_reason}` : ''}</div>
+                )}
+                {isAdmin && approval.rating && <div className="text-sm">Rating: {approval.rating}/5</div>}
+                {isAdmin && approval.comment && <div className="text-sm" style={{ marginTop: 4 }}>{approval.comment}</div>}
+                {!approval.comment && !approval.rejection_reason && !approval.override_reason && <div className="text-sm subtle">No approval comment.</div>}
+                <div className="row wrap" style={{ gap: 8, marginTop: 10 }}>
+                  <ApprovalActions
+                    ms={milestone} isAdmin={isAdmin} openModal={openModal} actions={actions} busy={busy}
+                    pendingDelays={threads.filter(d => d.status !== 'accepted').length}
+                  />
+                </div>
+              </div>
+            </section>
+          )}
         </div>
-      ))}
-    </div>
+      </aside>
+    </>
   );
 }
 
@@ -1022,6 +1366,104 @@ function AdvanceStatusModal({ project, projectId, form, handleField, modalError,
   );
 }
 
+// ── CompletionTracking — milestone vs project completion dates ───────────────
+function CompletionTracking({ project, milestones, isAdmin }) {
+  if (milestones.length === 0) return null;
+
+  const completed = milestones.filter(m => m.status === 'completed' && m.completed_at);
+  const allDone = completed.length === milestones.length;
+  const finalAt = allDone
+    ? completed.reduce((latest, m) => (new Date(m.completed_at) > new Date(latest) ? m.completed_at : latest), completed[0].completed_at)
+    : null;
+
+  const targets = [{ label: 'Approved end date', due: project.approved_end_date }];
+  if (isAdmin) targets.push({ label: 'Company end date', due: project.company_end_date });
+
+  const verdict = (due) => {
+    if (!due) return { tone: 'muted', text: 'No end date set' };
+    if (allDone) {
+      const n = daysOver(finalAt, due);
+      if (n > 0) return { tone: 'danger', text: `Exceeded by ${plural(n)}` };
+      if (n === 0) return { tone: 'success', text: 'Completed on the end date' };
+      return { tone: 'success', text: `Completed ${plural(-n)} early` };
+    }
+    const n = daysOver(new Date(), due);
+    if (n > 0) return { tone: 'danger', text: `Overdue by ${plural(n)} and still open` };
+    return { tone: 'muted', text: `${plural(-n)} remaining` };
+  };
+
+  const projectOverrun = (() => {
+    const due = project.approved_end_date;
+    if (!due) return null;
+    const n = allDone ? daysOver(finalAt, due) : daysOver(new Date(), due);
+    return n > 0 ? n : 0;
+  })();
+
+  const rowTone = { danger: 'var(--danger)', success: 'var(--success)', muted: 'var(--text-2)' };
+
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <div className="card-header">
+        <div>
+          <div className="card-title">Completion Tracking</div>
+          <div className="card-subtitle">
+            {allDone
+              ? `Final milestone completed on ${fmtDate(finalAt)}`
+              : `${completed.length} of ${milestones.length} milestones completed`}
+          </div>
+        </div>
+      </div>
+      <div className="card-body" style={{ paddingTop: 4 }}>
+        <div className="stat-grid" style={{ marginBottom: 12 }}>
+          <StatTile
+            label="Project days exceeded"
+            value={projectOverrun === null ? '—' : plural(projectOverrun)}
+            icon="calendar"
+            tone={projectOverrun > 0 ? 'danger' : 'success'}
+            sub={projectOverrun === null ? 'no approved end date' : allDone ? 'final completion vs approved end' : 'so far, vs approved end'}
+          />
+        </div>
+        {targets.map(t => {
+          const v = verdict(t.due);
+          return (
+            <div key={t.label} className="row" style={{ justifyContent: 'space-between', padding: '8px 0' }}>
+              <span className="text-sm muted">{t.label}: <strong>{fmtDate(t.due)}</strong></span>
+              <span className="fw-600 text-sm" style={{ color: rowTone[v.tone] }}>{v.text}</span>
+            </div>
+          );
+        })}
+        <hr className="divider" />
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr><th>Milestone</th><th>Due</th><th>Completed</th><th>Variance</th></tr>
+            </thead>
+            <tbody>
+              {milestones.map(m => {
+                const n = m.status === 'completed' ? daysOver(m.completed_at, m.approved_end_date) : null;
+                let text = '—'; let color = 'var(--text-2)';
+                if (m.status !== 'completed') text = 'Pending';
+                else if (n === null) text = 'No due date';
+                else if (n > 0) { text = `+${plural(n)} over`; color = 'var(--danger)'; }
+                else if (n === 0) { text = 'On time'; color = 'var(--success)'; }
+                else { text = `${plural(-n)} early`; color = 'var(--success)'; }
+                return (
+                  <tr key={m.id}>
+                    <td className="fw-600">{m.title}</td>
+                    <td className="muted">{fmtDate(m.approved_end_date)}</td>
+                    <td className="muted">{m.status === 'completed' ? fmtDate(m.completed_at) : '—'}</td>
+                    <td className="fw-600" style={{ color }}>{text}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── OverviewTab — module-level ───────────────────────────────────────────────
 function OverviewTab({ project, milestones, assignments, isAdmin, actions, busy }) {
   const pocs = assignments.filter(a => a.assignment_role === 'poc');
@@ -1069,6 +1511,8 @@ function OverviewTab({ project, milestones, assignments, isAdmin, actions, busy 
           </div>
         </div>
       </div>
+
+      <CompletionTracking project={project} milestones={milestones} isAdmin={isAdmin} />
     </div>
   );
 }
@@ -1207,6 +1651,9 @@ function ProjectHealthBanner({ milestones, assignments, delays, isAdmin }) {
     const p = allDelays.filter(d => d.status === 'pending').length;
     if (p > 0) chips.push({ tone: 'warning', label: `${p} delay thread${p > 1 ? 's' : ''} awaiting partner decision` });
 
+    const rj = milestones.filter(m => m.approval?.status === 'rejected').length;
+    if (rj > 0) chips.push({ tone: 'danger', label: `${rj} approval${rj > 1 ? 's' : ''} denied by partner — resubmit or override` });
+
     const dn = allDelays.filter(d => d.status === 'denied').length;
     if (dn > 0) chips.push({ tone: 'danger', label: `${dn} denied delay thread${dn > 1 ? 's' : ''} — action needed` });
   } else {
@@ -1244,6 +1691,7 @@ export default function ProjectDetail() {
   const [milestones, setMilestones] = useState([]);
   const [assignments, setAssignments] = useState([]);
   const [delays, setDelays] = useState([]);
+  const [commentsMsId, setCommentsMsId] = useState(null);
   const [allPeople, setAllPeople] = useState([]);
   const [tab, setTab] = useState('overview');
   const [loading, setLoading] = useState(true);
@@ -1388,12 +1836,10 @@ export default function ProjectDetail() {
     }
   };
 
-  const delayThreadCount = delays.reduce((n, g) => n + (Array.isArray(g.delays) ? g.delays.length : 0), 0);
   const TABS = [
     { id: 'overview',   label: 'Overview' },
     { id: 'resources',  label: 'Resources', count: assignments.length },
     { id: 'milestones', label: 'Milestones', count: milestones.length },
-    { id: 'comments',   label: 'Comments',   count: delayThreadCount },
   ];
   const canAdvance = isAdmin && STATUS_ORDER.indexOf(project.status) < STATUS_ORDER.length - 1;
 
@@ -1496,16 +1942,21 @@ export default function ProjectDetail() {
           modal={modal} form={form} handleField={handleField}
           modalError={modalError} saving={saving}
           openModal={openModal} closeModal={closeModal} doSave={doSave}
-          actions={actions} busy={busy} onReviewDelays={() => setTab('comments')}
+          actions={actions} busy={busy} onOpenComments={setCommentsMsId}
         />
       )}
-      {tab === 'comments' && (
-        <CommentsTab
-          delays={delays} milestones={milestones}
-          isAdmin={isAdmin} projectId={id} resources={assignments}
-          onChanged={() => loadProject(true)}
-        />
-      )}
+      {commentsMsId && (() => {
+        const ms = milestones.find(m => m.id === commentsMsId);
+        return ms ? (
+          <MilestoneCommentsDrawer
+            milestone={ms} delays={delays}
+            isAdmin={isAdmin} projectId={id} resources={assignments}
+            onChanged={() => loadProject(true)}
+            onClose={() => setCommentsMsId(null)}
+            openModal={openModal} actions={actions} busy={busy}
+          />
+        ) : null;
+      })()}
 
       {/* Advance Status Modal — mounted regardless of active tab */}
       {modal?.type === 'advance-status' && (
