@@ -43,6 +43,11 @@ router.post('/', requireAuth, resolveProjectScope, async (req, res) => {
     const ms = await loadMilestone(req.params.milestoneId, req.project.id);
     if (!ms) return res.status(404).json({ error: 'Milestone not found' });
 
+    const closed = await query("SELECT 1 FROM approvals WHERE milestone_id = $1 AND status = 'approved'", [ms.id]);
+    if (closed.rows.length) {
+      return res.status(422).json({ error: 'This milestone is approved, so its conversation is closed' });
+    }
+
     const body = typeof req.body?.body === 'string' ? req.body.body.trim() : '';
     if (!body) return res.status(422).json({ error: 'A comment cannot be empty' });
     if (body.length > MAX_BODY) return res.status(422).json({ error: `A comment can be at most ${MAX_BODY} characters` });

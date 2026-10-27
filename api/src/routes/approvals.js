@@ -84,7 +84,7 @@ router.post('/approve', requireAuth, resolveProjectScope, async (req, res) => {
     const updated = await query(
       `UPDATE approvals
        SET status = 'approved', approved_at = NOW(), approved_by = $1, rating = $2, comment = $3, updated_at = NOW()
-       WHERE id = $4 AND status = 'pending'
+       WHERE id = $4 AND status IN ('pending', 'rejected')
        RETURNING *`,
       [req.person.id, ratingNum, comment.trim(), approval.id]
     );
@@ -120,6 +120,20 @@ async function isPocOnProject(projectId, personId) {
   return r.rows[0].n > 0;
 }
 
+const MAX_REASON = 1900;
+
+// Mirrors approval decisions into the milestone conversation so the full back-and-forth reads in one place.
+async function postApprovalComment(milestoneId, authorId, body) {
+  try {
+    await query(
+      'INSERT INTO milestone_comments (milestone_id, author_id, body) VALUES ($1, $2, $3)',
+      [milestoneId, authorId, body]
+    );
+  } catch (err) {
+    console.error('postApprovalComment failed:', err);
+  }
+}
+
 async function loadApproval(milestoneId, projectId) {
   const r = await query(
     `SELECT a.* FROM approvals a JOIN milestones m ON m.id = a.milestone_id
@@ -143,14 +157,16 @@ router.post('/reject', requireAuth, resolveProjectScope, async (req, res) => {
 
     const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
     if (!reason) return res.status(422).json({ error: 'A reason is required to deny an approval' });
+    if (reason.length > MAX_REASON) return res.status(422).json({ error: `Reason can be at most ${MAX_REASON} characters` });
 
     const updated = await query(
       `UPDATE approvals SET status = 'rejected', rejected_at = NOW(), rejected_by = $1,
          rejection_reason = $2, updated_at = NOW()
-       WHERE id = $3 AND status = 'pending' RETURNING *`,
+       WHERE id = $3 AND status IN ('pending', 'rejected') RETURNING *`,
       [req.person.id, reason, approval.id]
     );
     if (!updated.rows.length) return res.status(422).json({ error: 'This approval was just actioned by someone else.' });
+    await postApprovalComment(milestoneId, req.person.id, `Approval denied: ${reason}`);
 
     await auditLog({ query }, {
       eventType: 'approval_rejected', entityType: 'approvals', entityId: approval.id,
@@ -164,30 +180,40 @@ router.post('/reject', requireAuth, resolveProjectScope, async (req, res) => {
   }
 });
 
-// POST /override  (admin approves on the partner's behalf, e.g. after a denial or no response)
+// POST /override  (admin approves on the partner's behalf at any point before it is approved)
 router.post('/override', requireAuth, requireAdmin, resolveProjectScope, async (req, res) => {
   try {
     const { projectId, milestoneId } = req.params;
+    const msRes = await query('SELECT * FROM milestones WHERE id = $1 AND project_id = $2', [milestoneId, projectId]);
+    if (!msRes.rows.length) return res.status(404).json({ error: 'Milestone not found' });
     const approval = await loadApproval(milestoneId, projectId);
 
-    const rule = canOverrideApproval(approval, req.person);
+    const rule = canOverrideApproval(approval, req.person, msRes.rows[0]);
     if (!rule.ok) return res.status(422).json({ error: rule.reason });
 
     const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
     if (reason.length < 5) return res.status(422).json({ error: 'A reason of at least 5 characters is required to override' });
+    if (reason.length > MAX_REASON) return res.status(422).json({ error: `Reason can be at most ${MAX_REASON} characters` });
 
-    const updated = await query(
-      `UPDATE approvals SET status = 'approved', approved_at = NOW(), approved_by = $1,
-         overridden_by = $1, override_reason = $2, updated_at = NOW()
-       WHERE id = $3 AND status <> 'approved' RETURNING *`,
-      [req.person.id, reason, approval.id]
-    );
+    const updated = approval
+      ? await query(
+          `UPDATE approvals SET status = 'approved', approved_at = NOW(), approved_by = $1,
+             overridden_by = $1, override_reason = $2, updated_at = NOW()
+           WHERE id = $3 AND status <> 'approved' RETURNING *`,
+          [req.person.id, reason, approval.id]
+        )
+      : await query(
+          `INSERT INTO approvals (milestone_id, status, submitted_at, submitted_by, approved_at, approved_by, overridden_by, override_reason)
+           VALUES ($1, 'approved', NOW(), $2, NOW(), $2, $2, $3) RETURNING *`,
+          [milestoneId, req.person.id, reason]
+        );
     if (!updated.rows.length) return res.status(422).json({ error: 'Already approved' });
 
+    await postApprovalComment(milestoneId, req.person.id, `Approved by admin override: ${reason}`);
     await auditLog({ query }, {
-      eventType: 'approval_overridden', entityType: 'approvals', entityId: approval.id,
+      eventType: 'approval_overridden', entityType: 'approvals', entityId: updated.rows[0].id,
       actorId: req.person.id, actorRole: req.person.role,
-      oldValues: { status: approval.status }, meta: { reason },
+      oldValues: { status: approval?.status ?? 'none' }, meta: { reason },
     });
     return res.json({ ...updated.rows[0], approved_by_name: req.person.name });
   } catch (err) {

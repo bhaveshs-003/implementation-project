@@ -110,9 +110,9 @@ function PendingIndicator() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  useEffect(() => {
-    apiFetch('/api/me/pending').then(setData).catch(() => {});
-  }, [location.pathname]);
+  const refresh = () => apiFetch('/api/me/pending').then(setData).catch(() => {});
+
+  useEffect(() => { refresh(); }, [location.pathname]);
 
   useEffect(() => {
     const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
@@ -126,7 +126,7 @@ function PendingIndicator() {
     <div ref={ref} style={{ position: 'relative' }}>
       <button
         className="pending-btn"
-        onClick={() => setOpen(v => !v)}
+        onClick={() => { if (!open) refresh(); setOpen(v => !v); }}
         aria-label={`${data.total} pending action${data.total > 1 ? 's' : ''}`}
         title="Pending actions"
       >
@@ -137,14 +137,17 @@ function PendingIndicator() {
       {open && (
         <div className="dropdown pending-dropdown" style={{ right: 0, minWidth: 280 }}>
           <div className="dropdown-header">Pending actions</div>
-          {data.items.map((item) => (
+          {data.items.map((item, i) => (
             <button
-              key={item.type}
+              key={`${item.type}-${item.link}-${i}`}
               className="dropdown-item"
               onClick={() => { setOpen(false); navigate(item.link); }}
             >
-              <span className="pending-item-count">{item.count}</span>
-              <span>{item.label}</span>
+              {item.detail ? <Icon name="chevronRight" size={14} /> : <span className="pending-item-count">{item.count}</span>}
+              <span className="pending-item-text">
+                <span>{item.label}</span>
+                {item.detail && <span className="pending-item-detail">{item.detail}</span>}
+              </span>
             </button>
           ))}
         </div>

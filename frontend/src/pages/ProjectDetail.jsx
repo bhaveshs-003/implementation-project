@@ -4,7 +4,6 @@ import { apiFetch } from '../lib/api.js';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import Modal from '../components/Modal.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
-import ProgressBar from '../components/ProgressBar.jsx';
 import Icon, { Avatar } from '../components/Icon.jsx';
 import { ProjectDetailSkeleton, useDelayedLoading } from '../components/Spinner.jsx';
 
@@ -262,15 +261,14 @@ function AssignModal({ role, eligible, onSave, onClose, saving }) {
 // ── ApprovalActions — partner approve/deny, admin override/resubmit ─────────
 function ApprovalActions({ ms, isAdmin, openModal, actions, busy, pendingDelays = 0 }) {
   const status = ms.approval?.status;
-  if (!status) return null;
 
   if (!isAdmin) {
-    if (status !== 'pending') return null;
+    if (status !== 'pending' && status !== 'rejected') return null;
     return (
       <>
         <button className="btn btn-danger btn-sm" onClick={() => openModal('reject-approval', { milestoneId: ms.id })}>
           <Icon name="x" />
-          Deny
+          {status === 'rejected' ? 'Deny Again' : 'Deny'}
         </button>
         <button className="btn btn-success btn-sm" onClick={() => openModal('approve', { milestoneId: ms.id })}>
           <Icon name="check" />
@@ -281,12 +279,13 @@ function ApprovalActions({ ms, isAdmin, openModal, actions, busy, pendingDelays 
   }
 
   if (status === 'approved') return null;
+  if (!status && ms.status !== 'completed') return null;
   return (
     <>
       {status === 'rejected' && (
         <button className="btn btn-soft btn-sm" onClick={() => actions.submitApproval(ms)} disabled={busy[`approval-${ms.id}`]}>
           <Icon name="send" />
-          {busy[`approval-${ms.id}`] ? 'Submitting…' : 'Resubmit for Approval'}
+          {busy[`approval-${ms.id}`] ? 'Submitting…' : 'Ask Partner to Re-review'}
         </button>
       )}
       <button className="btn btn-secondary btn-sm" onClick={() => openModal('override-approval', { milestoneId: ms.id })}>
@@ -301,21 +300,20 @@ function ApprovalActions({ ms, isAdmin, openModal, actions, busy, pendingDelays 
 function MilestoneCard({ ms, project, isAdmin, openModal, actions, busy, onOpenComments }) {
   const openSubtasks = (ms.sub_tasks || []).filter(st => st.status !== 'completed');
   const pendingDelays = (ms.delays || []).filter(d => d.status !== 'accepted').length;
-  const awaitingPartner = !isAdmin && ms.approval?.status === 'pending';
+  const awaitingPartner = !isAdmin && ['pending', 'rejected'].includes(ms.approval?.status);
   const subTasks = ms.sub_tasks || [];
   const doneSubtasks = subTasks.length - openSubtasks.length;
   const isApproved = ms.approval?.status === 'approved';
   const awaitingSubmission = isAdmin && ms.status === 'completed' && !ms.approval;
   const approvalPending = ms.approval?.status === 'pending';
   const approvalRejected = ms.approval?.status === 'rejected';
-  const completedLate = ms.status === 'completed' && ms.on_time === false;
-  const completedOnTime = ms.status === 'completed' && !completedLate;
   const commentCount = (ms.delays || []).length + (ms.comment_count || 0);
-  const stateClass = approvalRejected ? ' card-ms-rejected'
-    : approvalPending ? ' card-ms-pending'
-    : completedLate ? ' card-ms-delayed'
-    : completedOnTime ? ' card-ms-ontime'
-    : '';
+  const [subsOpen, setSubsOpen] = useState(false);
+  const hasBody = (awaitingPartner && pendingDelays > 0) || subTasks.length > 0 || (isAdmin && ms.status !== 'completed');
+  // White until submitted; amber while sign-off is open; green/red only once approved.
+  const tone = isApproved ? (ms.on_time === false ? 'red' : 'green')
+    : ms.approval ? 'amber'
+    : null;
 
   const handleCardClick = (e) => {
     if (e.target.closest('button, a, input, textarea, select, label')) return;
@@ -324,64 +322,40 @@ function MilestoneCard({ ms, project, isAdmin, openModal, actions, busy, onOpenC
 
   return (
     <div
-      className={`card mb-16 card-clickable${stateClass}${awaitingSubmission ? ' card-attention' : ''}`}
+      className={`card ms-card card-clickable${tone ? ` ms-tone ms-${tone}` : ''}${hasBody ? '' : ' ms-card-flat'}`}
       onClick={handleCardClick}
     >
       <div className="card-header" style={{ alignItems: 'flex-start', flexWrap: 'wrap' }}>
         <div className="row" style={{ alignItems: 'flex-start', gap: 12, minWidth: 0, flex: 1 }}>
-          <span className="stat-icon" style={{
-            width: 32, height: 32, flexShrink: 0,
-            background: ms.status === 'completed' ? 'var(--success-soft)' : 'var(--primary-soft)',
-            color: ms.status === 'completed' ? 'var(--success)' : 'var(--primary)',
-          }}>
+          <span className="stat-icon ms-icon" style={{ width: 28, height: 28, flexShrink: 0 }}>
             <Icon name="flag" />
           </span>
           <div style={{ minWidth: 0 }}>
             <div className="row wrap" style={{ gap: 8 }}>
               <span className="card-title">{ms.title}</span>
+              {ms.is_extended && <span className="badge ms-extended">Extended</span>}
               <StatusBadge status={ms.status} />
-              {awaitingSubmission && <span className="badge badge-warning">Ready to submit for approval</span>}
-              {approvalPending && <span className="badge badge-violet">Pending approval</span>}
-              {approvalRejected && <span className="badge badge-danger">Approval denied</span>}
-              {completedLate && <span className="badge badge-danger">Completed with delay</span>}
-              {completedOnTime && <span className="badge badge-success">Completed on time</span>}
+              {awaitingSubmission && <span className="badge">Ready to submit for approval</span>}
+              {approvalPending && <span className="badge">Pending approval</span>}
+              {approvalRejected && <span className="badge">Approval denied</span>}
             </div>
-            <div className="row wrap text-sm muted" style={{ gap: 12, marginTop: 4 }}>
+            <div className="row wrap text-sm muted ms-meta" style={{ gap: 12, marginTop: 2 }}>
               {ms.approved_start_date && (
                 <span className="row" style={{ gap: 6 }}>
-                  <Icon name="calendar" size={14} style={{ color: 'var(--text-3)' }} />
+                  <Icon name="calendar" size={14} />
                   {fmtRange(ms.approved_start_date, ms.approved_end_date)}
                 </span>
               )}
-              {subTasks.length > 0 && (
+              {commentCount > 0 && (
                 <span className="row" style={{ gap: 6 }}>
-                  <Icon name="checkCircle" size={14} style={{ color: 'var(--text-3)' }} />
-                  {doneSubtasks}/{subTasks.length} sub-tasks
+                  <Icon name="message" size={14} />
+                  {commentCount}
                 </span>
               )}
             </div>
           </div>
         </div>
         <div className="row wrap">
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={() => onOpenComments(ms.id)}
-            title="Open comments and conversation"
-          >
-            <Icon name="message" />
-            Comments{commentCount > 0 ? ` (${commentCount})` : ''}
-          </button>
-          {isAdmin && (
-            <button
-              className="btn btn-ghost btn-sm"
-              onClick={() => openModal('edit-milestone', { milestoneId: ms.id })}
-              title="Edit milestone and sub-task names"
-            >
-              <Icon name="edit" />
-              Edit
-            </button>
-          )}
           {isAdmin && ms.status !== 'completed' && (
             <button
               className="btn btn-secondary btn-sm"
@@ -410,7 +384,8 @@ function MilestoneCard({ ms, project, isAdmin, openModal, actions, busy, onOpenC
         </div>
       </div>
 
-      <div className="card-body" style={{ paddingTop: 16, paddingBottom: 16 }}>
+      {hasBody && (
+      <div className="card-body ms-body">
         {awaitingPartner && pendingDelays > 0 && (
           <div className="alert alert-warning row-between" style={{ marginBottom: 14 }}>
             <span className="row" style={{ gap: 8 }}>
@@ -420,87 +395,77 @@ function MilestoneCard({ ms, project, isAdmin, openModal, actions, busy, onOpenC
             <button type="button" className="btn btn-secondary btn-sm" onClick={() => onOpenComments(ms.id)}>Review delays</button>
           </div>
         )}
-        {ms.approval && (
-          <div
-            className={`alert ${isApproved ? 'alert-success' : approvalRejected ? 'alert-error' : 'alert-warning'}`}
-            style={{ marginBottom: subTasks.length > 0 || (isAdmin && ms.status !== 'completed') ? 14 : 0 }}
-          >
-            <Icon name={isApproved ? 'checkCircle' : approvalRejected ? 'alert' : 'clock'} />
-            <div className="row wrap" style={{ gap: 6 }}>
-              <span>Approval:</span>
-              <strong>{approvalRejected ? 'Denied' : ms.approval.status.charAt(0).toUpperCase() + ms.approval.status.slice(1)}</strong>
-              {isApproved && ms.approval.overridden_by
-                ? <span>by admin override{ms.approval.approved_by_name ? ` (${ms.approval.approved_by_name})` : ''}{ms.approval.override_reason ? ` — "${ms.approval.override_reason}"` : ''}</span>
-                : isApproved && ms.approval.approved_by_name && <span>by {ms.approval.approved_by_name}</span>}
-              {approvalRejected && (
-                <span>{ms.approval.rejected_by_name ? `by ${ms.approval.rejected_by_name} ` : ''}— "{ms.approval.rejection_reason}"</span>
-              )}
-              {isAdmin && ms.approval.rating && (
-                <span className="row" style={{ gap: 4 }}>
-                  · <Icon name="star" size={13} /> {ms.approval.rating}/5
-                </span>
-              )}
-              {isAdmin && ms.approval.comment && <span>· "{ms.approval.comment}"</span>}
-            </div>
-          </div>
-        )}
-
-        {subTasks.length > 0 && (
-          <div className="list">
-            {subTasks.map(st => {
-              const done = st.status === 'completed';
-              const pending = busy[`st-${st.id}`];
-              const canTick = isAdmin && !done;
-              const tickDisabled = project.status !== 'in_progress' || pending;
-              return (
-                <div key={st.id} className="list-item" style={{ padding: '8px 0' }}>
-                  {canTick ? (
-                    <button
-                      type="button"
-                      className="subtask-check"
-                      onClick={() => actions.completeSubtask(ms, st)}
-                      disabled={tickDisabled}
-                      aria-label={`Mark "${st.title}" as done`}
-                      title={project.status !== 'in_progress' ? 'Project must be in progress' : 'Mark as done'}
-                    >
-                      <Icon name="circle" size={18} className="icon-default" />
-                      <Icon name="checkCircle" size={18} className="icon-hover" />
-                    </button>
-                  ) : (
-                    <Icon
-                      name={done ? 'checkCircle' : 'circle'}
-                      size={18}
-                      style={{ color: done ? 'var(--success)' : 'var(--text-3)', flexShrink: 0 }}
-                    />
-                  )}
-                  <span className="text-sm" style={{
-                    flex: 1, minWidth: 0,
-                    textDecoration: done ? 'line-through' : 'none',
-                    color: done ? 'var(--text-3)' : 'var(--text)',
-                  }}>
-                    {st.title}
-                  </span>
+        {(subTasks.length > 0 || (isAdmin && ms.status !== 'completed')) && (
+          <>
+            <button
+              type="button"
+              className="accordion-toggle"
+              style={{ borderTop: 'none', paddingTop: 0 }}
+              aria-expanded={subsOpen}
+              onClick={() => setSubsOpen(v => !v)}
+            >
+              <Icon name="chevronDown" />
+              Sub-tasks
+              <span className="subtle text-sm">({doneSubtasks}/{subTasks.length})</span>
+            </button>
+            {subsOpen && (
+              <div className="accordion-body">
+                <div className="list">
+                  {subTasks.map(st => {
+                    const done = st.status === 'completed';
+                    const pending = busy[`st-${st.id}`];
+                    const canTick = isAdmin && !done;
+                    const tickDisabled = project.status !== 'in_progress' || pending;
+                    return (
+                      <div key={st.id} className="list-item" style={{ padding: '8px 0' }}>
+                        {canTick ? (
+                          <button
+                            type="button"
+                            className="subtask-check"
+                            onClick={() => actions.completeSubtask(ms, st)}
+                            disabled={tickDisabled}
+                            aria-label={`Mark "${st.title}" as done`}
+                            title={project.status !== 'in_progress' ? 'Project must be in progress' : 'Mark as done'}
+                          >
+                            <Icon name="circle" size={18} className="icon-default" />
+                            <Icon name="checkCircle" size={18} className="icon-hover" />
+                          </button>
+                        ) : (
+                          <Icon
+                            name={done ? 'checkCircle' : 'circle'}
+                            size={18}
+                            style={{ flexShrink: 0, opacity: done ? 1 : 0.6 }}
+                          />
+                        )}
+                        <span className="text-sm ms-subtitle" style={{
+                          flex: 1, minWidth: 0,
+                          textDecoration: done ? 'line-through' : 'none',
+                          opacity: done ? 0.65 : 1,
+                        }}>
+                          {st.title}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
-              );
-            })}
-          </div>
-        )}
 
-        {subTasks.length === 0 && !ms.approval && !(isAdmin && ms.status !== 'completed') && (
-          <div className="text-sm subtle">No sub-tasks.</div>
-        )}
-
-        {isAdmin && ms.status !== 'completed' && (
-          <button
-            className="btn btn-ghost btn-sm"
-            onClick={() => openModal('add-subtask', { milestoneId: ms.id })}
-            style={{ marginTop: subTasks.length > 0 ? 8 : 0, marginLeft: -10 }}
-          >
-            <Icon name="plus" />
-            Sub-task
-          </button>
+                {subTasks.length === 0 && <div className="text-sm subtle">No sub-tasks yet.</div>}
+                {isAdmin && ms.status !== 'completed' && (
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => openModal('add-subtask', { milestoneId: ms.id })}
+                    style={{ marginTop: subTasks.length > 0 ? 8 : 0, marginLeft: -10 }}
+                  >
+                    <Icon name="plus" />
+                    Sub-task
+                  </button>
+                )}
+              </div>
+            )}
+          </>
         )}
       </div>
+      )}
     </div>
   );
 }
@@ -514,7 +479,7 @@ function MilestonesTab({ milestones, project, assignments, isAdmin, projectId, m
   const projectStartKey = project.approved_start_date ? String(project.approved_start_date).slice(0, 10) : null;
   const msDateError = (() => {
     const { approved_start_date: start, approved_end_date: end } = form || {};
-    if (projectStartKey && start && start < projectStartKey) {
+    if (!form?.is_extended && projectStartKey && start && start < projectStartKey) {
       return `Milestone start date cannot be earlier than the project's approved start date (${fmtDate(projectStartKey)}).`;
     }
     if (start && end && end < start) return 'End date cannot be before the start date.';
@@ -604,7 +569,7 @@ function MilestonesTab({ milestones, project, assignments, isAdmin, projectId, m
                 type="date"
                 className="input"
                 value={form.approved_start_date || ''}
-                min={project.approved_start_date ? String(project.approved_start_date).slice(0, 10) : undefined}
+                min={!form.is_extended && project.approved_start_date ? String(project.approved_start_date).slice(0, 10) : undefined}
                 max={form.approved_end_date || undefined}
                 onChange={e => handleField('approved_start_date', e.target.value)}
               />
@@ -616,12 +581,21 @@ function MilestonesTab({ milestones, project, assignments, isAdmin, projectId, m
                 type="date"
                 className="input"
                 value={form.approved_end_date || ''}
-                min={form.approved_start_date || (project.approved_start_date ? String(project.approved_start_date).slice(0, 10) : undefined)}
+                min={form.approved_start_date || (!form.is_extended && project.approved_start_date ? String(project.approved_start_date).slice(0, 10) : undefined)}
                 onChange={e => handleField('approved_end_date', e.target.value)}
               />
             </div>
           </div>
-          {msDateError && <div className="alert alert-error" role="alert"><Icon name="alert" />{msDateError}</div>}
+          <label className="row text-sm" style={{ gap: 6, cursor: 'pointer', width: 'fit-content' }}>
+            <input
+              type="checkbox"
+              style={{ width: 14, height: 14, margin: 0 }}
+              checked={!!form.is_extended}
+              onChange={e => handleField('is_extended', e.target.checked)}
+            />
+            Extended milestone
+          </label>
+          {msDateError && <div className="alert alert-error" role="alert" style={{ marginTop: 10 }}><Icon name="alert" />{msDateError}</div>}
           <ModalError message={modalError} />
         </Modal>
       )}
@@ -856,7 +830,7 @@ function MilestonesTab({ milestones, project, assignments, isAdmin, projectId, m
               <Icon name="alertTriangle" />
               <span>
                 This approves the milestone on the partner's behalf
-                {ms?.approval?.status === 'rejected' ? ', overriding their denial' : ''}. It is recorded in the audit trail and shown to the partner.
+                {ms?.approval?.status === 'rejected' ? ', overriding their denial' : ms?.approval ? ', without waiting for their response' : ' without it being submitted to them'}. It is recorded in the audit trail and shown to the partner.
               </span>
             </div>
             <div className="field" style={{ marginBottom: 0 }}>
@@ -1173,6 +1147,7 @@ function DelayThread({ delay, isAdmin, projectId, resources, onChanged }) {
 
 // ── MilestoneConversation — free back-and-forth between admin and partner POC ─
 function MilestoneConversation({ milestone, projectId, resources, currentUserId, onPosted }) {
+  const closed = milestone.approval?.status === 'approved';
   const [comments, setComments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [body, setBody] = useState('');
@@ -1244,6 +1219,12 @@ function MilestoneConversation({ milestone, projectId, resources, currentUserId,
         })}
       </div>
 
+      {closed ? (
+        <div className="alert alert-success" style={{ marginTop: 10, marginBottom: 0 }}>
+          <Icon name="checkCircle" />
+          <span>This milestone is approved, so the conversation is closed.</span>
+        </div>
+      ) : (
       <div className="convo-composer" onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); send(); } }}>
         {subTasks.length > 0 && (
           <select className="select" value={target} onChange={e => setTarget(e.target.value)} aria-label="Comment on" style={{ marginBottom: 8 }}>
@@ -1268,6 +1249,7 @@ function MilestoneConversation({ milestone, projectId, resources, currentUserId,
           </button>
         </div>
       </div>
+      )}
     </section>
   );
 }
@@ -1304,12 +1286,79 @@ function MilestoneCommentsDrawer({ milestone, delays, isAdmin, projectId, resour
               <span className="text-xs subtle">{subTasks.length} sub-task{subTasks.length === 1 ? '' : 's'}</span>
             </div>
           </div>
-          <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose} aria-label="Close comments">
-            <Icon name="x" />
-          </button>
+          <div className="row" style={{ gap: 4, flexShrink: 0 }}>
+            {isAdmin && (
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => openModal('edit-milestone', { milestoneId: milestone.id })}
+                title="Edit milestone and sub-task names"
+              >
+                <Icon name="edit" />
+                Edit
+              </button>
+            )}
+            <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose} aria-label="Close panel">
+              <Icon name="x" />
+            </button>
+          </div>
         </div>
 
         <div className="drawer-body">
+          {!isAdmin && approval && ['pending', 'rejected'].includes(approval.status) && (() => {
+            const blocking = threads.filter(d => d.status !== 'accepted').length;
+            return (
+              <div className="alert alert-warning" style={{ display: 'block' }}>
+                <div className="row" style={{ gap: 8, marginBottom: 8 }}>
+                  <Icon name="clock" />
+                  <span className="fw-600">
+                    {approval.status === 'pending' ? 'This milestone is awaiting your approval' : 'You denied this milestone. You can still approve it or deny again.'}
+                  </span>
+                </div>
+                {blocking > 0 && (
+                  <div className="text-sm" style={{ marginBottom: 8 }}>
+                    {blocking} delay thread{blocking === 1 ? '' : 's'} below must be accepted before you can approve.
+                  </div>
+                )}
+                <div className="row wrap" style={{ gap: 8 }}>
+                  <ApprovalActions ms={milestone} isAdmin={isAdmin} openModal={openModal} actions={actions} busy={busy} pendingDelays={blocking} />
+                </div>
+              </div>
+            );
+          })()}
+
+          <section className="drawer-section">
+            <h4 className="drawer-section-title"><Icon name="flag" size={14} /> Details</h4>
+            <div className="list">
+              <DateRow label="Approved" value={fmtRange(milestone.approved_start_date, milestone.approved_end_date)} />
+              {isAdmin && (milestone.company_start_date || milestone.company_end_date) && (
+                <DateRow label="Company" value={fmtRange(milestone.company_start_date, milestone.company_end_date)} icon="briefcase" />
+              )}
+              {isAdmin && (milestone.partner_start_date || milestone.partner_end_date) && (
+                <DateRow label="Partner" value={fmtRange(milestone.partner_start_date, milestone.partner_end_date)} icon="users" />
+              )}
+            </div>
+            <div className="label" style={{ marginTop: 12 }}>
+              Sub-tasks ({subTasks.filter(st => st.status === 'completed').length}/{subTasks.length})
+            </div>
+            {subTasks.length === 0 ? (
+              <div className="text-sm subtle">No sub-tasks.</div>
+            ) : (
+              <div className="list">
+                {subTasks.map(st => {
+                  const done = st.status === 'completed';
+                  return (
+                    <div key={st.id} className="list-item" style={{ padding: '6px 0' }}>
+                      <Icon name={done ? 'checkCircle' : 'circle'} size={16} style={{ color: done ? 'var(--success)' : 'var(--text-3)', flexShrink: 0 }} />
+                      <span className="text-sm" style={{ flex: 1, minWidth: 0, textDecoration: done ? 'line-through' : 'none', color: done ? 'var(--text-3)' : 'var(--text)' }}>
+                        {st.title}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
           <MilestoneConversation
             milestone={milestone} projectId={projectId} resources={resources}
             currentUserId={currentUserId} onPosted={onChanged}
@@ -1463,6 +1512,69 @@ function AdvanceStatusModal({ project, projectId, form, handleField, modalError,
   );
 }
 
+// ── PendingApprovals — admin's list of milestones still waiting on sign-off ──
+function PendingApprovals({ milestones, isAdmin, onOpenMilestone }) {
+  const daysSince = (d) => {
+    if (!d) return null;
+    return Math.max(0, Math.floor((Date.now() - new Date(d).getTime()) / 86400000));
+  };
+  const rows = (isAdmin
+    ? milestones
+        .filter(m => m.status === 'completed' && m.approval?.status !== 'approved')
+        .map(m => {
+          const a = m.approval;
+          if (!a) return { m, state: 'Not submitted', tone: 'warning', since: m.completed_at, verb: 'completed' };
+          if (a.status === 'rejected') return { m, state: 'Denied by partner', tone: 'danger', since: a.rejected_at, verb: 'denied' };
+          return { m, state: 'Awaiting partner', tone: 'violet', since: a.submitted_at, verb: 'submitted' };
+        })
+    : milestones.flatMap(m => {
+        const out = [];
+        if (m.approval?.status === 'pending') {
+          out.push({ m, state: 'Awaiting your approval', tone: 'warning', since: m.approval.submitted_at, verb: 'submitted' });
+        }
+        const openDelays = (m.delays || []).filter(d => d.status === 'pending');
+        if (openDelays.length > 0) {
+          out.push({ m, state: 'Delay awaiting your decision', tone: 'warning', since: openDelays[0].created_at, verb: 'raised' });
+        }
+        return out;
+      })
+  ).sort((x, y) => new Date(x.since || 0) - new Date(y.since || 0));
+
+  return (
+    <div className="card" style={{ marginTop: 12 }}>
+      <div className="card-header">
+        <div>
+          <div className="card-title">{isAdmin ? 'Pending approval' : 'Pending actions'}</div>
+          <div className="card-subtitle">{isAdmin ? 'Completed milestones that are not yet approved' : 'Milestones and delays waiting for your decision'}</div>
+        </div>
+        <span className="tab-count">{rows.length}</span>
+      </div>
+      {rows.length === 0 ? (
+        <div className="card-body text-sm subtle">{isAdmin ? 'Nothing is waiting for approval.' : 'Nothing needs your action right now.'}</div>
+      ) : (
+        <div className="list">
+          {rows.map(({ m, state, tone, since, verb }, i) => {
+            const waiting = daysSince(since);
+            return (
+              <div key={`${m.id}-${i}`} className="list-item clickable" style={{ padding: '8px 16px', margin: 0, borderRadius: 0 }} onClick={() => onOpenMilestone(m.id)}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="fw-600 truncate">{m.title}</div>
+                  <div className="text-xs subtle">
+                    {verb} {fmtDate(since)}{waiting !== null ? ` · waiting ${waiting === 0 ? 'less than a day' : `${waiting} day${waiting === 1 ? '' : 's'}`}` : ''}
+                    {m.on_time === false ? ' · completed late' : ''}
+                  </div>
+                </div>
+                <span className={`badge badge-${tone}`}>{state}</span>
+                <Icon name="chevronRight" size={16} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── CompletionTracking — milestone vs project completion dates ───────────────
 function CompletionTracking({ project, milestones, isAdmin }) {
   if (milestones.length === 0) return null;
@@ -1499,7 +1611,7 @@ function CompletionTracking({ project, milestones, isAdmin }) {
   const rowTone = { danger: 'var(--danger)', success: 'var(--success)', muted: 'var(--text-2)' };
 
   return (
-    <div className="card" style={{ marginTop: 16 }}>
+    <div className="card" style={{ marginTop: 12 }}>
       <div className="card-header">
         <div>
           <div className="card-title">Completion Tracking</div>
@@ -1509,105 +1621,50 @@ function CompletionTracking({ project, milestones, isAdmin }) {
               : `${completed.length} of ${milestones.length} milestones completed`}
           </div>
         </div>
+        {projectOverrun !== null && (
+          <span className={`badge ${projectOverrun > 0 ? 'badge-danger' : 'badge-success'}`} style={{ fontWeight: 600 }}>
+            {projectOverrun > 0 ? `${plural(projectOverrun, 'day')} exceeded` : 'Within schedule'}
+          </span>
+        )}
       </div>
-      <div className="card-body" style={{ paddingTop: 4 }}>
-        <div className="stat-grid" style={{ marginBottom: 12 }}>
-          <StatTile
-            label="Project days exceeded"
-            value={projectOverrun === null ? '—' : plural(projectOverrun)}
-            icon="calendar"
-            tone={projectOverrun > 0 ? 'danger' : 'success'}
-            sub={projectOverrun === null ? 'no approved end date' : allDone ? 'final completion vs approved end' : 'so far, vs approved end'}
-          />
-        </div>
+      <div className="card-body">
         {targets.map(t => {
           const v = verdict(t.due);
           return (
-            <div key={t.label} className="row" style={{ justifyContent: 'space-between', padding: '8px 0' }}>
+            <div key={t.label} className="row" style={{ justifyContent: 'space-between', padding: '3px 0' }}>
               <span className="text-sm muted">{t.label}: <strong>{fmtDate(t.due)}</strong></span>
               <span className="fw-600 text-sm" style={{ color: rowTone[v.tone] }}>{v.text}</span>
             </div>
           );
         })}
-        <hr className="divider" />
-        <div className="table-wrap">
-          <table className="table">
-            <thead>
-              <tr><th>Milestone</th><th>Due</th><th>Completed</th><th>Variance</th></tr>
-            </thead>
-            <tbody>
-              {milestones.map(m => {
-                const n = m.status === 'completed' ? daysOver(m.completed_at, m.approved_end_date) : null;
-                let text = '—'; let color = 'var(--text-2)';
-                if (m.status !== 'completed') text = 'Pending';
-                else if (n === null) text = 'No due date';
-                else if (n > 0) { text = `+${plural(n)} over`; color = 'var(--danger)'; }
-                else if (n === 0) { text = 'On time'; color = 'var(--success)'; }
-                else { text = `${plural(-n)} early`; color = 'var(--success)'; }
-                return (
-                  <tr key={m.id}>
-                    <td className="fw-600">{m.title}</td>
-                    <td className="muted">{fmtDate(m.approved_end_date)}</td>
-                    <td className="muted">{m.status === 'completed' ? fmtDate(m.completed_at) : '—'}</td>
-                    <td className="fw-600" style={{ color }}>{text}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
       </div>
     </div>
   );
 }
 
 // ── OverviewTab — module-level ───────────────────────────────────────────────
-function OverviewTab({ project, milestones, assignments, isAdmin, actions, busy }) {
-  const pocs = assignments.filter(a => a.assignment_role === 'poc');
-  const resources = assignments.filter(a => a.assignment_role === 'resource');
+function OverviewTab({ project, milestones, assignments, isAdmin, actions, busy, onOpenMilestone }) {
   const totalMs = milestones.length;
   const doneMs = milestones.filter(m => m.status === 'completed').length;
   const pct = Math.min(100, Math.round((doneMs / (totalMs || 1)) * 100));
+  const completed = milestones.filter(m => m.status === 'completed');
+  const lateBy = (side) => completed.filter(m => m.on_time === false && (m.delay_side === 'company') === (side === 'company')).length;
+  const onTimeCount = completed.filter(m => m.on_time !== false).length;
 
   return (
-    <div>
+    <div className="overview-compact">
       <div className="stat-grid">
         <StatTile label="Progress" value={`${pct}%`} icon="trending" tone="primary" />
-        <StatTile label="Milestones" value={`${doneMs}/${totalMs}`} icon="flag" tone="success" sub="completed" />
-        <StatTile label="Team" value={assignments.length} icon="users" tone="violet" sub={`${pocs.length} POC · ${resources.length} resources`} />
-        <StatTile label="Approved dates" value={fmtRange(project.approved_start_date, project.approved_end_date)} icon="calendar" tone="info" />
+        <StatTile
+          label="Milestones"
+          value={`${doneMs}/${totalMs}`}
+          icon="flag"
+          tone="success"
+          sub={doneMs > 0 ? `${onTimeCount} on time · ${lateBy('company')} company delay · ${lateBy('partner')} partner delay` : 'completed'}
+        />
       </div>
 
-      <div className="grid-2">
-        <div className="card">
-          <div className="card-header">
-            <div>
-              <div className="card-title">Progress</div>
-              <div className="card-subtitle">{doneMs} of {totalMs} milestones completed</div>
-            </div>
-            <StatusBadge status={project.status} />
-          </div>
-          <div className="card-body">
-            <ProgressBar value={doneMs} max={totalMs || 1} showLabel />
-            {project.description && (
-              <p className="text-sm muted mt-16" style={{ whiteSpace: 'pre-wrap' }}>{project.description}</p>
-            )}
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="card-header">
-            <div className="card-title">Dates</div>
-          </div>
-          <div className="card-body" style={{ paddingTop: 4, paddingBottom: 4 }}>
-            <div className="list">
-              <DateRow label="Approved" value={fmtRange(project.approved_start_date, project.approved_end_date)} />
-              {isAdmin && <DateRow label="Company" value={fmtRange(project.company_start_date, project.company_end_date)} icon="briefcase" />}
-              {isAdmin && <DateRow label="Partner" value={fmtRange(project.partner_start_date, project.partner_end_date)} icon="users" />}
-            </div>
-          </div>
-        </div>
-      </div>
+      <PendingApprovals milestones={milestones} isAdmin={isAdmin} onOpenMilestone={onOpenMilestone} />
 
       <CompletionTracking project={project} milestones={milestones} isAdmin={isAdmin} />
     </div>
@@ -1970,6 +2027,12 @@ export default function ProjectDetail() {
               </span>
             )}
             <StatusBadge status={project.status} />
+            {(project.approved_start_date || project.approved_end_date) && (
+              <span className="row" style={{ gap: 6 }} title="Approved dates">
+                <Icon name="calendar" size={14} style={{ color: 'var(--text-3)' }} />
+                {fmtRange(project.approved_start_date, project.approved_end_date)}
+              </span>
+            )}
           </div>
         </div>
         {canAdvance && (
@@ -2022,6 +2085,7 @@ export default function ProjectDetail() {
         <OverviewTab
           project={project} milestones={milestones} assignments={assignments}
           isAdmin={isAdmin} actions={actions} busy={busy}
+          onOpenMilestone={(msId) => { setTab('milestones'); setCommentsMsId(msId); }}
         />
       )}
       {tab === 'resources' && (

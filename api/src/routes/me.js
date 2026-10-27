@@ -75,70 +75,62 @@ router.get('/pending', requireAuth, async (req, res) => {
         });
       }
     } else if (person.role === 'partner_poc') {
-      const newResult = await query(
-        `SELECT COUNT(*)::int AS n
-         FROM project_assignments pa
-         JOIN projects p ON p.id = pa.project_id
-         WHERE p.deleted_at IS NULL AND pa.person_id = $1
-           AND pa.assignment_role = 'poc' AND pa.seen_at IS NULL`,
-        [person.id]
-      );
-      const newCount = newResult.rows[0].n;
-      if (newCount > 0) {
+      // One item per action, each linking straight to where it is resolved.
+      const [newRes, approvalRes, delayRes] = await Promise.all([
+        query(
+          `SELECT p.id AS project_id, p.code, p.title
+           FROM project_assignments pa JOIN projects p ON p.id = pa.project_id
+           WHERE p.deleted_at IS NULL AND pa.person_id = $1
+             AND pa.assignment_role = 'poc' AND pa.seen_at IS NULL
+           ORDER BY pa.assigned_at DESC`,
+          [person.id]
+        ),
+        query(
+          `SELECT a.status, m.id AS milestone_id, m.title AS milestone_title, p.id AS project_id, p.code
+           FROM approvals a
+           JOIN milestones m ON m.id = a.milestone_id
+           JOIN projects p ON p.id = m.project_id
+           JOIN project_assignments pa ON pa.project_id = p.id AND pa.person_id = $1 AND pa.assignment_role = 'poc'
+           WHERE p.deleted_at IS NULL AND a.status = 'pending'
+           ORDER BY a.submitted_at`,
+          [person.id]
+        ),
+        query(
+          `SELECT d.id AS delay_id, d.status, m.id AS milestone_id, m.title AS milestone_title, p.id AS project_id, p.code
+           FROM delays d
+           JOIN milestones m ON m.id = d.milestone_id
+           JOIN projects p ON p.id = m.project_id
+           JOIN project_assignments pa ON pa.project_id = p.id AND pa.person_id = $1 AND pa.assignment_role = 'poc'
+           WHERE p.deleted_at IS NULL
+             AND (d.status = 'pending'
+                  OR (d.status = 'denied' AND ${LAST_AUTHOR_ROLE} = 'admin'))
+           ORDER BY d.created_at`,
+          [person.id]
+        ),
+      ]);
+
+      for (const r of newRes.rows) {
         items.push({
-          type: 'new_assignments',
-          count: newCount,
-          label: `new project${newCount > 1 ? 's' : ''} assigned to you`,
-          link: '/projects',
+          type: 'new_assignment', count: 1,
+          label: 'New project assigned to you',
+          detail: `${r.code} · ${r.title}`,
+          link: `/projects/${r.project_id}`,
         });
       }
-
-      // Milestone approvals pending this partner's sign-off
-      const approvalResult = await query(
-        `SELECT COUNT(*)::int AS n
-         FROM approvals a
-         JOIN milestones m ON m.id = a.milestone_id
-         JOIN projects p ON p.id = m.project_id
-         JOIN project_assignments pa
-           ON pa.project_id = p.id
-           AND pa.person_id = $1
-           AND pa.assignment_role = 'poc'
-         WHERE p.deleted_at IS NULL
-           AND a.status = 'pending'`,
-        [person.id]
-      );
-      const approvalCount = approvalResult.rows[0].n;
-      if (approvalCount > 0) {
+      for (const r of approvalRes.rows) {
         items.push({
-          type: 'pending_approvals',
-          count: approvalCount,
-          label: `milestone${approvalCount > 1 ? 's' : ''} awaiting your approval`,
-          link: '/projects',
+          type: 'pending_approval', count: 1,
+          label: 'Milestone awaiting your approval',
+          detail: `${r.code} · ${r.milestone_title}`,
+          link: `/projects/${r.project_id}`,
         });
       }
-
-      // Delay threads pending this partner's accept/deny decision
-      const delayResult = await query(
-        `SELECT COUNT(*)::int AS n
-         FROM delays d
-         JOIN milestones m ON m.id = d.milestone_id
-         JOIN projects p ON p.id = m.project_id
-         JOIN project_assignments pa
-           ON pa.project_id = p.id
-           AND pa.person_id = $1
-           AND pa.assignment_role = 'poc'
-         WHERE p.deleted_at IS NULL
-           AND (d.status = 'pending'
-                OR (d.status = 'denied' AND ${LAST_AUTHOR_ROLE} = 'admin'))`,
-        [person.id]
-      );
-      const delayCount = delayResult.rows[0].n;
-      if (delayCount > 0) {
+      for (const r of delayRes.rows) {
         items.push({
-          type: 'pending_delays',
-          count: delayCount,
-          label: `delay thread${delayCount > 1 ? 's' : ''} awaiting your response`,
-          link: '/projects',
+          type: 'pending_delay', count: 1,
+          label: r.status === 'pending' ? 'Delay awaiting your decision' : 'Admin replied to your denied delay',
+          detail: `${r.code} · ${r.milestone_title}`,
+          link: `/projects/${r.project_id}`,
         });
       }
     }

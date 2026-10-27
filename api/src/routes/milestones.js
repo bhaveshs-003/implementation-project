@@ -66,8 +66,9 @@ router.post('/', requireAuth, requireAdmin, resolveProjectScope, async (req, res
     const { title, order_index,
       company_start_date, company_end_date,
       partner_start_date, partner_end_date,
-      approved_start_date, approved_end_date } = req.body || {};
+      approved_start_date, approved_end_date, is_extended } = req.body || {};
     if (!title) return res.status(422).json({ error: 'title required' });
+    const extended = is_extended === true;
 
     const dateErrors = [
       validateDateRange(company_start_date, company_end_date, 'Company'),
@@ -75,7 +76,7 @@ router.post('/', requireAuth, requireAdmin, resolveProjectScope, async (req, res
       validateDateRange(approved_start_date, approved_end_date, 'Approved'),
     ].filter(Boolean);
     if (dateErrors.length) return res.status(422).json({ error: dateErrors[0] });
-    const startError = validateAgainstProjectStart(req.project, {
+    const startError = extended ? null : validateAgainstProjectStart(req.project, {
       company_start_date, partner_start_date, approved_start_date,
     });
     if (startError) return res.status(422).json({ error: startError });
@@ -84,12 +85,12 @@ router.post('/', requireAuth, requireAdmin, resolveProjectScope, async (req, res
     const result = await query(
       `INSERT INTO milestones (project_id, title, status, order_index,
          company_start_date, company_end_date, partner_start_date, partner_end_date,
-         approved_start_date, approved_end_date)
-       VALUES ($1,$2,'not_started',$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+         approved_start_date, approved_end_date, is_extended)
+       VALUES ($1,$2,'not_started',$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [req.project.id, title, order_index ?? maxIdx.rows[0].next,
        company_start_date||null, company_end_date||null,
        partner_start_date||null, partner_end_date||null,
-       approved_start_date||null, approved_end_date||null]
+       approved_start_date||null, approved_end_date||null, extended]
     );
     await auditLog({ query }, { eventType: 'milestone_created', entityType: 'milestones', entityId: result.rows[0].id, actorId: req.person.id, actorRole: req.person.role, newValues: result.rows[0] });
     res.status(201).json(result.rows[0]);
@@ -116,7 +117,7 @@ router.put('/:milestoneId', requireAuth, requireAdmin, resolveProjectScope, asyn
       validateDateRange(approved_start_date, approved_end_date, 'Approved'),
     ].filter(Boolean);
     if (dateErrors.length) return res.status(422).json({ error: dateErrors[0] });
-    const startError = validateAgainstProjectStart(req.project, {
+    const startError = ms.rows[0].is_extended ? null : validateAgainstProjectStart(req.project, {
       company_start_date, partner_start_date, approved_start_date,
     });
     if (startError) return res.status(422).json({ error: startError });

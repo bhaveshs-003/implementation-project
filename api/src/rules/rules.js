@@ -81,8 +81,8 @@ export function canSubmitForApproval(milestone, existingApproval, pocCount) {
 // ── Approval rules ────────────────────────────────────────────────────────────
 
 export function canApprove(approval, pendingDelayCount, isPOCOnProject) {
-  if (!approval || approval.status !== 'pending') {
-    return { ok: false, reason: 'No pending approval' };
+  if (!approval || !['pending', 'rejected'].includes(approval.status)) {
+    return { ok: false, reason: 'No open approval' };
   }
   if (!isPOCOnProject) {
     return { ok: false, reason: 'Not authorised' };
@@ -94,8 +94,8 @@ export function canApprove(approval, pendingDelayCount, isPOCOnProject) {
 }
 
 export function canRejectApproval(approval, isPOCOnProject) {
-  if (!approval || approval.status !== 'pending') {
-    return { ok: false, reason: 'No pending approval to deny' };
+  if (!approval || !['pending', 'rejected'].includes(approval.status)) {
+    return { ok: false, reason: 'No open approval to deny' };
   }
   if (!isPOCOnProject) {
     return { ok: false, reason: 'Not authorised' };
@@ -103,12 +103,15 @@ export function canRejectApproval(approval, isPOCOnProject) {
   return { ok: true };
 }
 
-export function canOverrideApproval(approval, person) {
+export function canOverrideApproval(approval, person, milestone) {
   if (person.role !== 'admin') {
     return { ok: false, reason: 'Only an admin can override an approval' };
   }
-  if (!approval || approval.status === 'approved') {
-    return { ok: false, reason: approval ? 'Already approved' : 'No approval to override' };
+  if (approval) {
+    return approval.status === 'approved' ? { ok: false, reason: 'Already approved' } : { ok: true };
+  }
+  if (!milestone || milestone.status !== 'completed') {
+    return { ok: false, reason: 'Milestone must be completed before it can be approved' };
   }
   return { ok: true };
 }
