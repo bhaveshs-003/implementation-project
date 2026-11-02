@@ -1,31 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Cell, LabelList,
-} from 'recharts';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import { apiFetch } from '../lib/api.js';
-import ProgressBar from '../components/ProgressBar.jsx';
-import StatusBadge from '../components/StatusBadge.jsx';
 import Icon from '../components/Icon.jsx';
 import { PageLoader, useDelayedLoading } from '../components/Spinner.jsx';
-import { fmtDate } from '../lib/format.js';
 
-/* Validated categorical slots 1-3 (blue, orange) + muted gray for "other"; critical is the reserved status red. */
-const C = { blue: '#2a78d6', orange: '#eb6834', gray: '#898781', critical: '#d03b3b' };
-const INK = { primary: '#0b0b0b', secondary: '#52514e', muted: '#898781' };
-const GRID = { vertical: false, stroke: '#e1e0d9' };
-const AXIS = { axisLine: false, tickLine: false, tick: { fill: INK.muted, fontSize: 12 } };
-const TOOLTIP = {
-  contentStyle: {
-    background: '#fff', border: '1px solid #e1e0d9', borderRadius: 10,
-    boxShadow: '0 4px 12px rgba(15, 23, 42, 0.08)', fontSize: 13, padding: '8px 12px',
-  },
-  labelStyle: { color: INK.primary, fontWeight: 600, marginBottom: 4 },
-  itemStyle: { padding: 0 },
-  cursor: { fill: '#f3f4f6' },
-};
+/* Colour-blind-safe palette (validated categorical slots 1-3, muted gray, reserved status red). */
+const COLOR = { blue: '#2a78d6', orange: '#eb6834', aqua: '#1baf7a', gray: '#898781', red: '#d03b3b' };
 
 const TONES = {
   primary: { background: 'var(--primary-soft)', color: 'var(--primary)' },
@@ -33,265 +14,155 @@ const TONES = {
   success: { background: 'var(--success-soft)', color: 'var(--success)' },
   warning: { background: 'var(--warning-soft)', color: 'var(--warning)' },
   danger: { background: 'var(--danger-soft)', color: 'var(--danger)' },
+  slate: { background: 'var(--slate-soft)', color: 'var(--text-2)' },
 };
 
-const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
-
-function StatCard({ label, value, sub, icon, tone = 'primary' }) {
-  return (
-    <div className="card stat">
+/* A KPI card: title, prominent number and a short label. Clickable when it has a destination. */
+function KpiCard({ title, value, label, icon, tone = 'primary', swatch, to, navigate }) {
+  const body = (
+    <>
       <div className="stat-top">
-        <span className="stat-label">{label}</span>
+        <span className="stat-label row" style={{ gap: 6 }}>
+          {swatch && <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: 2, background: swatch, display: 'inline-block' }} />}
+          {title}
+        </span>
         <span className="stat-icon" style={TONES[tone]}><Icon name={icon} /></span>
       </div>
-      <div className="stat-value">{value ?? '—'}</div>
-      {sub && <div className="text-xs subtle" style={{ marginTop: 4 }}>{sub}</div>}
-    </div>
+      <div className="stat-value">{value}</div>
+      {label && <div className="text-xs subtle">{label}</div>}
+    </>
+  );
+  if (!to) return <div className="card stat">{body}</div>;
+  return (
+    <button
+      type="button"
+      className="card stat kpi-link"
+      onClick={() => navigate(to)}
+      aria-label={`${title}: ${value}. Open details`}
+    >
+      {body}
+    </button>
   );
 }
 
-function Section({ title, subtitle, children, flush = false, style }) {
+/* One slim proportion bar; values live on the cards, so the bar carries no numbers of its own. */
+function ShareBar({ segments, label }) {
+  const total = segments.reduce((s, x) => s + x.value, 0);
+  if (total === 0) return null;
   return (
-    <div className="card" style={style}>
-      <div className="card-header">
-        <div>
-          <div className="card-title">{title}</div>
-          {subtitle && <div className="card-subtitle">{subtitle}</div>}
-        </div>
-      </div>
-      {flush ? children : <div className="card-body">{children}</div>}
-    </div>
-  );
-}
-
-function NoData({ text = 'No data available yet.' }) {
-  return (
-    <div className="empty" style={{ padding: '32px 16px' }}>
-      <div className="empty-icon"><Icon name="inbox" /></div>
-      <div className="empty-text">{text}</div>
-    </div>
-  );
-}
-
-/* Horizontal bar chart: one mark per category, value labelled at the bar end, identity on the axis. */
-function HBar({ data, valueFormat = (v) => v, label, tooltipExtra }) {
-  const height = Math.max(150, data.length * 46 + 16);
-  return (
-    <div role="img" aria-label={label}>
-      <ResponsiveContainer width="100%" height={height}>
-        <BarChart data={data} layout="vertical" margin={{ top: 4, right: 48, left: 0, bottom: 4 }}>
-          <CartesianGrid horizontal={false} stroke="#e1e0d9" />
-          <XAxis type="number" hide domain={[0, 'dataMax']} />
-          <YAxis type="category" dataKey="name" width={118} {...AXIS} tick={{ fill: INK.secondary, fontSize: 12 }} />
-          <Tooltip
-            {...TOOLTIP}
-            formatter={(v, _n, item) => [valueFormat(v), tooltipExtra ? tooltipExtra(item.payload) : 'Value']}
-          />
-          <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={20}>
-            {data.map((d, i) => <Cell key={i} fill={d.fill || C.blue} />)}
-            <LabelList dataKey="value" position="right" formatter={valueFormat} fill={INK.primary} fontSize={12} fontWeight={600} />
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
-  );
-}
-
-/* ── Throughput: milestones completed per week ── */
-function ThroughputTrend({ data }) {
-  if (!data?.length) return <NoData text="No milestones completed in the last 8 weeks." />;
-  const chartData = data.map((r) => ({
-    week: new Date(r.week).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
-    completions: r.completions,
-  }));
-  return (
-    <div role="img" aria-label="Milestones completed per week over the last eight weeks">
-      <ResponsiveContainer width="100%" height={236}>
-        <LineChart data={chartData} margin={{ top: 20, right: 12, left: -12, bottom: 0 }}>
-          <CartesianGrid {...GRID} />
-          <XAxis dataKey="week" {...AXIS} />
-          <YAxis allowDecimals={false} {...AXIS} />
-          <Tooltip {...TOOLTIP} cursor={{ stroke: '#c3c2b7', strokeWidth: 1 }} />
-          <Line
-            type="monotone" dataKey="completions" name="Milestones completed"
-            stroke={C.blue} strokeWidth={2}
-            dot={{ r: 4, fill: C.blue, stroke: '#fcfcfb', strokeWidth: 2 }}
-            activeDot={{ r: 6, fill: C.blue, stroke: '#fcfcfb', strokeWidth: 2 }}
-          >
-            <LabelList dataKey="completions" position="top" fill={INK.primary} fontSize={12} fontWeight={600} />
-          </Line>
-        </LineChart>
-      </ResponsiveContainer>
-    </div>
-  );
-}
-
-/* ── Approval pipeline: where completed milestones sit in sign-off ── */
-function ApprovalPipeline({ data }) {
-  if (!data) return <NoData />;
-  const rows = [
-    { name: 'Not submitted', value: data.not_submitted, fill: C.blue },
-    { name: 'Awaiting partner', value: data.awaiting_partner, fill: C.blue },
-    { name: 'Denied', value: data.denied, fill: C.critical },
-    { name: 'Approved', value: data.approved, fill: C.gray },
-  ];
-  if (rows.every((r) => r.value === 0)) return <NoData text="No completed milestones yet." />;
-  return <HBar data={rows} label="Completed milestones by approval stage" tooltipExtra={() => 'Milestones'} />;
-}
-
-/* ── Who caused the delays ── */
-function DelayCauses({ data }) {
-  if (!data?.length) return <NoData text="No delayed milestones." />;
-  const order = { company: 0, partner: 1, unattributed: 2 };
-  const meta = {
-    company: { name: 'Company side', fill: C.blue },
-    partner: { name: 'Partner side', fill: C.orange },
-    unattributed: { name: 'Unattributed', fill: C.gray },
-  };
-  const rows = [...data]
-    .sort((a, b) => order[a.side] - order[b.side])
-    .map((r) => ({ name: meta[r.side].name, value: r.count, fill: meta[r.side].fill }));
-  return <HBar data={rows} label="Delayed milestones by responsible side" tooltipExtra={() => 'Delayed milestones'} />;
-}
-
-/* ── How late, by project type ── */
-function LateByType({ data }) {
-  if (!data?.length) return <NoData text="No delayed milestones with a due date." />;
-  const rows = data.map((r) => ({ name: r.type, value: Math.round(r.avg_days_late * 10) / 10, count: r.delayed_milestones }));
-  return (
-    <HBar
-      data={rows}
-      valueFormat={(v) => `${v} d`}
-      label="Average days late per project type"
-      tooltipExtra={(p) => `Avg days late (${plural(p.count, 'delayed milestone')})`}
-    />
-  );
-}
-
-/* ── Schedule slippage: days beyond each project's approved end date ── */
-function Slippage({ projects, navigate }) {
-  if (!projects?.length) return <NoData text="No project is past its approved end date." />;
-  const max = Math.max(...projects.map((p) => p.days_over));
-  return (
-    <div className="list">
-      {projects.map((p) => (
-        <div key={p.id} className="list-item clickable" onClick={() => navigate(`/projects/${p.id}`)}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div className="row" style={{ justifyContent: 'space-between', gap: 12 }}>
-              <div className="fw-600 truncate">
-                <span className="mono text-sm muted">{p.code}</span>
-                <span style={{ margin: '0 8px', color: 'var(--text-3)' }}>·</span>
-                {p.title}
-              </div>
-              <span className="fw-600 text-sm" style={{ whiteSpace: 'nowrap' }}>{plural(p.days_over, 'day')} over</span>
-            </div>
-            <div style={{ height: 8, borderRadius: 4, background: '#e1e0d9', margin: '8px 0 6px' }}>
-              <div style={{ width: `${Math.max(4, (p.days_over / max) * 100)}%`, height: '100%', borderRadius: 4, background: C.blue }} />
-            </div>
-            <div className="text-xs subtle">
-              {p.finished ? 'Finished late' : 'Still open'} · approved end {fmtDate(p.approved_end_date)}
-            </div>
-          </div>
-          <Icon name="chevronRight" size={16} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
-        </div>
+    <div className="share-bar" role="img" aria-label={`${label}: ${segments.filter(s => s.value > 0).map(s => `${s.name} ${s.value}`).join(', ')}`}>
+      {segments.filter(s => s.value > 0).map((s) => (
+        <span
+          key={s.name}
+          title={`${s.name}: ${s.value} (${Math.round((s.value / total) * 100)}%)`}
+          style={{ width: `${(s.value / total) * 100}%`, background: s.color }}
+        />
       ))}
     </div>
   );
 }
 
-/* ── Partner: next milestone deadlines ── */
-function Upcoming({ items, navigate }) {
-  if (!items?.length) return <NoData text="No open milestones with a due date." />;
+function Section({ title, subtitle, children }) {
   return (
-    <div className="list">
-      {items.map((m) => {
-        const overdue = m.days_left < 0;
-        const when = overdue ? `${plural(-m.days_left, 'day')} overdue`
-          : m.days_left === 0 ? 'Due today' : `Due in ${plural(m.days_left, 'day')}`;
-        return (
-          <div key={m.id} className="list-item clickable" onClick={() => navigate(`/projects/${m.project_id}`)}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="fw-600 truncate">{m.title}</div>
-              <div className="text-xs subtle">
-                <span className="mono">{m.code}</span> · due {fmtDate(m.due_date)}
-              </div>
-            </div>
-            <span className="row text-sm fw-600" style={{ gap: 6, color: overdue ? 'var(--danger)' : 'var(--text-2)', whiteSpace: 'nowrap' }}>
-              {overdue && <Icon name="alertTriangle" size={14} />}
-              {when}
-            </span>
-            <Icon name="chevronRight" size={16} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
-          </div>
-        );
-      })}
-    </div>
+    <section className="dash-section">
+      <h2 className="dash-heading">{title}</h2>
+      {subtitle && <p className="text-sm subtle" style={{ margin: '0 0 10px' }}>{subtitle}</p>}
+      {children}
+    </section>
   );
 }
 
-/* ── Project progress table ── */
-function ProjectProgressTable({ projects, navigate }) {
-  const [sortKey, setSortKey] = useState('title');
-  const [sortDir, setSortDir] = useState('asc');
-  if (!projects?.length) return <NoData text="No projects." />;
-
-  const value = (p, key) => {
-    if (key === 'progress') return p.total_milestones ? p.completed_milestones / p.total_milestones : 0;
-    const v = p[key];
-    return typeof v === 'string' ? v.toLowerCase() : v;
-  };
-  const sorted = [...projects].sort((a, b) => {
-    const av = value(a, sortKey), bv = value(b, sortKey);
-    if (av === bv) return 0;
-    return sortDir === 'asc' ? (av > bv ? 1 : -1) : (av < bv ? 1 : -1);
-  });
-  const handleSort = (key) => {
-    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-    else { setSortKey(key); setSortDir('asc'); }
-  };
+function AdminDashboard({ data, navigate }) {
+  const p = data.portfolio;
+  const d = data.delivery;
+  const a = data.approvals;
+  const classified = p.completed_on_time + p.completed_delayed;
+  const unclassifiedNote = p.completed_unclassified > 0
+    ? `${p.completed_unclassified} completed project${p.completed_unclassified === 1 ? '' : 's'} not classified (no approved end date or milestones)`
+    : null;
 
   return (
-    <div className="table-wrap">
-      <table className="table">
-        <thead>
-          <tr>
-            {[['code', 'Code'], ['title', 'Title'], ['type', 'Type'], ['status', 'Status'], ['progress', 'Milestones done']].map(([key, label]) => (
-              <th key={key} className={`sortable${sortKey === key ? ' sorted' : ''}`} onClick={() => handleSort(key)}>
-                <span className="row" style={{ gap: 4 }}>
-                  {label}
-                  <Icon
-                    name={sortKey === key ? (sortDir === 'asc' ? 'arrowUp' : 'arrowDown') : 'chevronsUpDown'}
-                    size={12}
-                    style={{ opacity: sortKey === key ? 1 : 0.5 }}
-                  />
-                </span>
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {sorted.map((p) => (
-            <tr key={p.id} className="clickable" onClick={() => navigate(`/projects/${p.id}`)}>
-              <td className="mono muted">{p.code}</td>
-              <td className="fw-600">{p.title}</td>
-              <td className="muted">{p.type || '—'}</td>
-              <td>{p.status ? <StatusBadge status={p.status} /> : '—'}</td>
-              <td style={{ minWidth: 200 }}>
-                <div className="row" style={{ gap: 10 }}>
-                  <div style={{ flex: 1 }}><ProgressBar value={p.completed_milestones} max={p.total_milestones} showLabel /></div>
-                  <span className="text-xs subtle" style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
-                    {p.completed_milestones}/{p.total_milestones}
-                  </span>
-                </div>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <>
+      <Section title="Portfolio snapshot" subtitle={unclassifiedNote}>
+        <div className="stat-grid">
+          <KpiCard title="Total projects" value={p.total} label="All projects" icon="layers" tone="primary" to="/projects" navigate={navigate} />
+          <KpiCard title="Not started" value={p.not_started} label="Status: Not Started" icon="clock" tone="slate" to="/projects?status=not_started" navigate={navigate} />
+          <KpiCard title="In progress" value={p.in_progress} label="Status: In-Progress" icon="activity" tone="info" to="/projects?status=in_progress" navigate={navigate} />
+          <KpiCard title="Completed" value={p.completed} label="Status: Completed" icon="checkCircle" tone="success" to="/projects?status=completed" navigate={navigate} />
+          <KpiCard title="Completed on time" value={p.completed_on_time} label="Finished by the approved end date" icon="check" tone="success" to="/projects?outcome=on_time" navigate={navigate} />
+          <KpiCard title="Completed with delay" value={p.completed_delayed} label="Finished after the approved end date" icon="alertTriangle" tone="danger" to="/projects?outcome=delayed" navigate={navigate} />
+        </div>
+        {classified === 0 && p.completed > 0 && (
+          <p className="text-xs subtle">Completed projects cannot be classified until they have an approved end date and completed milestones.</p>
+        )}
+      </Section>
+
+      <Section title="Delivery performance" subtitle="Completed milestones, by the delay responsibility recorded at completion">
+        <div className="stat-grid">
+          <KpiCard title="Total milestones" value={d.total_milestones} label="Including extended milestones" icon="flag" tone="primary" />
+          <KpiCard title="Completed on time" value={d.on_time} label="Milestones" icon="checkCircle" tone="success" swatch={COLOR.blue} to="/projects?milestone=on_time" navigate={navigate} />
+          <KpiCard title="Delayed: company side" value={d.company_delay} label="Milestones" icon="briefcase" tone="warning" swatch={COLOR.orange} to="/projects?milestone=company_delay" navigate={navigate} />
+          <KpiCard title="Delayed: partner side" value={d.partner_delay} label="Milestones" icon="users" tone="info" swatch={COLOR.aqua} to="/projects?milestone=partner_delay" navigate={navigate} />
+        </div>
+        <ShareBar
+          label="Completed milestones by outcome"
+          segments={[
+            { name: 'On time', value: d.on_time, color: COLOR.blue },
+            { name: 'Delayed: company side', value: d.company_delay, color: COLOR.orange },
+            { name: 'Delayed: partner side', value: d.partner_delay, color: COLOR.aqua },
+          ]}
+        />
+      </Section>
+
+      <Section title="Approval & delay" subtitle="Current approval state of each milestone; a milestone is counted once">
+        <div className="stat-grid">
+          <KpiCard title="Submitted for approval" value={a.submitted} label="Awaiting the partner" icon="send" tone="warning" swatch={COLOR.gray} to="/projects?approval=pending" navigate={navigate} />
+          <KpiCard title="Approved" value={a.approved} label="By the Partner POC" icon="checkCircle" tone="success" swatch={COLOR.blue} to="/projects?approval=approved" navigate={navigate} />
+          <KpiCard title="Declined" value={a.declined} label="Currently denied" icon="x" tone="danger" swatch={COLOR.red} to="/projects?approval=declined" navigate={navigate} />
+          <KpiCard title="Approved by override" value={a.overridden} label="Admin Override & Approve" icon="check" tone="info" swatch={COLOR.orange} to="/projects?approval=overridden" navigate={navigate} />
+        </div>
+        <ShareBar
+          label="Milestones by approval state"
+          segments={[
+            { name: 'Submitted', value: a.submitted, color: COLOR.gray },
+            { name: 'Approved', value: a.approved, color: COLOR.blue },
+            { name: 'Declined', value: a.declined, color: COLOR.red },
+            { name: 'Approved by override', value: a.overridden, color: COLOR.orange },
+          ]}
+        />
+      </Section>
+    </>
   );
 }
 
-/* ── Main Dashboard ── */
+function PartnerDashboard({ data, navigate }) {
+  const p = data.portfolio;
+  const d = data.delivery;
+  return (
+    <>
+      <Section title="Portfolio">
+        <div className="stat-grid">
+          <KpiCard title="Assigned projects" value={p.assigned} label="Projects where you are the POC" icon="layers" tone="primary" to="/projects" navigate={navigate} />
+          <KpiCard title="Active projects" value={p.active} label="Status: In-Progress" icon="activity" tone="info" to="/projects?status=in_progress" navigate={navigate} />
+          <KpiCard title="Awaiting my approval" value={p.awaiting_my_approval} label="Milestones submitted to you" icon="inbox" tone={p.awaiting_my_approval > 0 ? 'warning' : 'success'} to="/projects?approval=pending" navigate={navigate} />
+          <KpiCard title="Completed on time" value={p.milestones_on_time} label="Milestones" icon="checkCircle" tone="success" to="/projects?milestone=on_time" navigate={navigate} />
+          <KpiCard title="Delayed milestones" value={p.delayed_milestones} label="Completed with a delay" icon="alertTriangle" tone="danger" to="/projects" navigate={navigate} />
+        </div>
+      </Section>
+
+      <Section
+        title="Delivery overview"
+        subtitle={d.projects_unclassified > 0 ? `${d.projects_unclassified} completed project${d.projects_unclassified === 1 ? '' : 's'} not classified (no approved end date or milestones)` : null}
+      >
+        <div className="stat-grid">
+          <KpiCard title="Projects delivered on time" value={d.projects_on_time} label="Finished by the approved end date" icon="check" tone="success" to="/projects?outcome=on_time" navigate={navigate} />
+          <KpiCard title="Projects delivered with delay" value={d.projects_delayed} label="Finished after the approved end date" icon="alertTriangle" tone="danger" to="/projects?outcome=delayed" navigate={navigate} />
+        </div>
+      </Section>
+    </>
+  );
+}
+
 export default function Dashboard() {
   const { person } = useAuth();
   const navigate = useNavigate();
@@ -304,23 +175,23 @@ export default function Dashboard() {
   useEffect(() => {
     apiFetch('/api/dashboard')
       .then(setData)
-      .catch(() => setError('Failed to load dashboard data.'))
+      .catch(() => setError('Failed to load dashboard data. Please refresh and try again.'))
       .finally(() => setLoading(false));
   }, []);
 
   const showLoader = useDelayedLoading(loading);
   if (loading) return showLoader ? <PageLoader message="Loading dashboard…" /> : null;
   if (error) return <div className="alert alert-error"><Icon name="alert" />{error}</div>;
+  if (!data?.portfolio) {
+    return (
+      <div className="alert alert-error">
+        <Icon name="alert" />
+        The dashboard data is in an unexpected format. The server may still be updating; please refresh in a few minutes.
+      </div>
+    );
+  }
 
-  const k = data?.kpis || {};
-  const projects = k.projects || {};
-  const onTime = k.on_time || { on_time: 0, total: 0 };
-  const onTimePct = onTime.total > 0 ? Math.round((onTime.on_time / onTime.total) * 100) : null;
-  const onTimeTone = onTimePct === null ? 'info' : onTimePct >= 80 ? 'success' : onTimePct >= 60 ? 'warning' : 'danger';
-  const projectsSub = [
-    projects.not_started ? `${projects.not_started} not started` : null,
-    projects.completed ? `${projects.completed} completed` : null,
-  ].filter(Boolean).join(' · ') || `${projects.total || 0} in total`;
+  const hasProjects = isAdmin ? data?.portfolio?.total > 0 : data?.portfolio?.assigned > 0;
 
   return (
     <div>
@@ -328,91 +199,27 @@ export default function Dashboard() {
         <div>
           <h1 className="page-title">Dashboard</h1>
           <p className="page-subtitle">
-            {person?.name ? `Welcome back, ${person.name}. ` : ''}Here’s how your projects are tracking.
+            {person?.name ? `Welcome back, ${person.name}. ` : ''}
+            {isAdmin ? 'A portfolio-wide view of delivery and approvals.' : 'An overview of the projects assigned to you.'}
           </p>
         </div>
       </div>
 
-      <div className="stat-grid">
-        <StatCard
-          label={isAdmin ? 'Active projects' : 'Your projects in progress'}
-          value={projects.in_progress ?? 0}
-          sub={projectsSub}
-          icon="activity" tone="primary"
-        />
-        <StatCard
-          label="On-time delivery"
-          value={onTimePct === null ? '—' : `${onTimePct}%`}
-          sub={onTime.total ? `${onTime.on_time} of ${plural(onTime.total, 'completed milestone')}` : 'No milestones completed yet'}
-          icon="checkCircle" tone={onTimeTone}
-        />
-        {isAdmin ? (
-          <>
-            <StatCard
-              label="Approval turnaround"
-              value={k.avg_approval_days === null || k.avg_approval_days === undefined ? '—' : `${k.avg_approval_days.toFixed(1)} days`}
-              sub="Average from submission to partner approval"
-              icon="clock" tone="info"
-            />
-            <StatCard
-              label="Open delay threads"
-              value={k.open_delay_threads ?? 0}
-              sub="Awaiting a decision or still under discussion"
-              icon="message" tone={k.open_delay_threads > 0 ? 'warning' : 'success'}
-            />
-          </>
-        ) : (
-          <>
-            <StatCard
-              label="Awaiting your approval"
-              value={k.awaiting_my_approval ?? 0}
-              sub="Milestones submitted for your sign-off"
-              icon="inbox" tone={k.awaiting_my_approval > 0 ? 'warning' : 'success'}
-            />
-            <StatCard
-              label="Delays awaiting you"
-              value={k.delays_awaiting_me ?? 0}
-              sub="Delay threads needing your decision or reply"
-              icon="message" tone={k.delays_awaiting_me > 0 ? 'warning' : 'success'}
-            />
-          </>
-        )}
-      </div>
-
-      {isAdmin ? (
-        <>
-          <div className="grid-2">
-            <Section title="Delivery throughput" subtitle="Milestones completed each week, last 8 weeks">
-              <ThroughputTrend data={data?.throughputTrend} />
-            </Section>
-            <Section title="Approval pipeline" subtitle="Where completed milestones are in sign-off">
-              <ApprovalPipeline data={data?.approvalPipeline} />
-            </Section>
-            <Section title="Delay responsibility" subtitle="Delayed milestones by the side that caused them">
-              <DelayCauses data={data?.delayCauses} />
-            </Section>
-            <Section title="Lateness by project type" subtitle="Average days past the milestone due date">
-              <LateByType data={data?.lateByType} />
-            </Section>
+      {!hasProjects ? (
+        <div className="card">
+          <div className="empty">
+            <div className="empty-icon"><Icon name="folder" /></div>
+            <div className="empty-title">{isAdmin ? 'No projects yet' : 'No projects assigned to you yet'}</div>
+            <div className="empty-text">
+              {isAdmin ? 'Create a project to start tracking delivery.' : 'Projects will appear here once an admin assigns you as the Partner POC.'}
+            </div>
           </div>
-
-          <Section
-            title="Schedule slippage"
-            subtitle="Projects beyond their approved end date, by days over"
-            style={{ marginBottom: 20 }}
-          >
-            <Slippage projects={data?.slippage} navigate={navigate} />
-          </Section>
-        </>
+        </div>
+      ) : isAdmin ? (
+        <AdminDashboard data={data} navigate={navigate} />
       ) : (
-        <Section title="Upcoming deadlines" subtitle="Next open milestones by approved due date" style={{ marginBottom: 20 }}>
-          <Upcoming items={data?.upcoming} navigate={navigate} />
-        </Section>
+        <PartnerDashboard data={data} navigate={navigate} />
       )}
-
-      <Section title="Project progress" subtitle="Milestones completed in each project" flush>
-        <ProjectProgressTable projects={data?.projectProgress} navigate={navigate} />
-      </Section>
     </div>
   );
 }

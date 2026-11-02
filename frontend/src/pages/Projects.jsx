@@ -15,6 +15,22 @@ const STATUS_LABELS = {
   completed: 'Completed',
 };
 
+const FILTER_KEYS = ['status', 'outcome', 'milestone', 'approval'];
+const FILTER_LABELS = {
+  'status:not_started': 'Not started projects',
+  'status:in_progress': 'In-progress projects',
+  'status:completed': 'Completed projects',
+  'outcome:on_time': 'Completed on time',
+  'outcome:delayed': 'Completed with delay',
+  'milestone:on_time': 'With milestones completed on time',
+  'milestone:company_delay': 'With company-side delayed milestones',
+  'milestone:partner_delay': 'With partner-side delayed milestones',
+  'approval:pending': 'With milestones awaiting approval',
+  'approval:approved': 'With partner-approved milestones',
+  'approval:declined': 'With declined milestones',
+  'approval:overridden': 'With admin-overridden milestones',
+};
+
 const PROJECT_TYPES = ['Implementation', 'Migration', 'Integration', 'Custom Development', 'Support', 'Other'];
 
 /* ── Project Form Modal ── */
@@ -232,10 +248,13 @@ export default function Projects() {
 
   // Only the first load shows a loader; later refreshes keep current rows visible and
   // drop out-of-order responses (e.g. from fast typing in search).
-  const fetchProjects = useCallback(async (q = '') => {
+  const fetchProjects = useCallback(async (q = '', filters = {}) => {
     const seq = ++fetchSeq.current;
     try {
-      const qs = q ? `?q=${encodeURIComponent(q)}` : '';
+      const sp = new URLSearchParams();
+      if (q) sp.set('q', q);
+      FILTER_KEYS.forEach((k) => { if (filters[k]) sp.set(k, filters[k]); });
+      const qs = sp.toString() ? `?${sp.toString()}` : '';
       const data = await apiFetch(`/api/projects${qs}`);
       if (seq !== fetchSeq.current) return;
       setProjects(data.projects || data || []);
@@ -247,25 +266,36 @@ export default function Projects() {
     }
   }, []);
 
-  useEffect(() => {
-    fetchProjects(query);
-  }, []);
+  const activeFilters = FILTER_KEYS.filter((k) => searchParams.get(k)).map((k) => ({ key: k, value: searchParams.get(k) }));
+  const filterSig = activeFilters.map((f) => `${f.key}=${f.value}`).join('&');
+  const currentFilters = () => Object.fromEntries(FILTER_KEYS.map((k) => [k, searchParams.get(k) || '']));
 
   useEffect(() => {
-    const onFocus = () => { if (document.visibilityState === 'visible') fetchProjects(query); };
+    fetchProjects(query, currentFilters());
+  }, [filterSig]);
+
+  const clearFilters = () => {
+    setSearchParams(query ? { q: query } : {});
+  };
+
+  useEffect(() => {
+    const onFocus = () => { if (document.visibilityState === 'visible') fetchProjects(query, currentFilters()); };
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onFocus);
     return () => {
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onFocus);
     };
-  }, [fetchProjects, query]);
+  }, [fetchProjects, query, filterSig]);
 
   const handleSearch = (val) => {
     setQuery(val);
-    setSearchParams(val ? { q: val } : {});
+    const next = new URLSearchParams();
+    if (val) next.set('q', val);
+    activeFilters.forEach((f) => next.set(f.key, f.value));
+    setSearchParams(next);
     clearTimeout(searchTimeout.current);
-    searchTimeout.current = setTimeout(() => fetchProjects(val), 350);
+    searchTimeout.current = setTimeout(() => fetchProjects(val, currentFilters()), 350);
   };
 
   return (
@@ -303,6 +333,16 @@ export default function Projects() {
               aria-label="Search projects"
             />
           </div>
+          {activeFilters.map((f) => (
+            <span key={f.key} className="badge badge-info row" style={{ gap: 6 }}>
+              Showing: {FILTER_LABELS[`${f.key}:${f.value}`] || f.value}
+            </span>
+          ))}
+          {activeFilters.length > 0 && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={clearFilters}>
+              <Icon name="x" size={14} /> Clear filter
+            </button>
+          )}
           {!loading && (
             <span className="text-sm subtle">{projects.length} project{projects.length !== 1 ? 's' : ''}</span>
           )}
@@ -400,7 +440,7 @@ export default function Projects() {
             } else {
               setShowForm(false);
               setEditProject(null);
-              fetchProjects(query);
+              fetchProjects(query, currentFilters());
             }
           }}
           onClose={() => { setShowForm(false); setEditProject(null); }}
@@ -413,7 +453,7 @@ export default function Projects() {
           onConfirm={() => {
             setProjects(prev => prev.filter(x => x.id !== deleteProject.id));
             setDeleteProject(null);
-            fetchProjects(query);
+            fetchProjects(query, currentFilters());
           }}
           onClose={() => setDeleteProject(null)}
         />

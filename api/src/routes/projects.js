@@ -18,9 +18,43 @@ function validateDateRange(start, end, label) {
   return null;
 }
 
+// Dashboard drill-down filters. Values come from fixed whitelists and are inlined as literals,
+// never from request text, so they cannot inject SQL.
+const DELIVERY_DATE = `(SELECT (MAX(dm.completed_at) AT TIME ZONE 'UTC')::date FROM milestones dm WHERE dm.project_id = p.id)`;
+const OUTCOME_SQL = {
+  on_time: `p.status = 'completed' AND p.approved_end_date IS NOT NULL AND ${DELIVERY_DATE} <= p.approved_end_date`,
+  delayed: `p.status = 'completed' AND p.approved_end_date IS NOT NULL AND ${DELIVERY_DATE} > p.approved_end_date`,
+};
+const MILESTONE_SQL = {
+  on_time: `m.status = 'completed' AND m.on_time = true`,
+  company_delay: `m.status = 'completed' AND m.on_time = false AND m.delay_side = 'company'`,
+  partner_delay: `m.status = 'completed' AND m.on_time = false AND m.delay_side = 'partner'`,
+};
+const APPROVAL_SQL = {
+  pending: `a.status = 'pending'`,
+  approved: `a.status = 'approved' AND a.overridden_by IS NULL`,
+  declined: `a.status = 'rejected'`,
+  overridden: `a.status = 'approved' AND a.overridden_by IS NOT NULL`,
+};
+const STATUSES = ['not_started', 'in_progress', 'completed'];
+
+function buildFilterSql({ status, outcome, milestone, approval }) {
+  const parts = [];
+  if (STATUSES.includes(status)) parts.push(`p.status = '${status}'`);
+  if (OUTCOME_SQL[outcome]) parts.push(`(${OUTCOME_SQL[outcome]})`);
+  if (MILESTONE_SQL[milestone]) {
+    parts.push(`EXISTS (SELECT 1 FROM milestones m WHERE m.project_id = p.id AND ${MILESTONE_SQL[milestone]})`);
+  }
+  if (APPROVAL_SQL[approval]) {
+    parts.push(`EXISTS (SELECT 1 FROM approvals a JOIN milestones m ON m.id = a.milestone_id WHERE m.project_id = p.id AND ${APPROVAL_SQL[approval]})`);
+  }
+  return parts.length ? ` AND ${parts.join(' AND ')}` : '';
+}
+
 router.get('/', requireAuth, async (req, res) => {
   try {
     const { q } = req.query;
+    const filterSql = buildFilterSql(req.query);
     let rows;
 
     if (req.person.role === 'admin') {
@@ -60,6 +94,7 @@ router.get('/', requireAuth, async (req, res) => {
         FROM projects p
         WHERE p.deleted_at IS NULL`;
       if (q) { params.push(`%${q}%`); sql += ` AND (p.code ILIKE $1 OR p.title ILIKE $1)`; }
+      sql += filterSql;
       sql += ' ORDER BY p.created_at DESC';
       rows = (await query(sql, params)).rows;
     } else {
@@ -86,6 +121,7 @@ router.get('/', requireAuth, async (req, res) => {
         JOIN project_assignments pa ON pa.project_id = p.id
         WHERE p.deleted_at IS NULL AND pa.person_id = $1 AND pa.assignment_role = 'poc'`;
       if (q) { params.push(`%${q}%`); sql += ` AND (p.code ILIKE $${params.length} OR p.title ILIKE $${params.length})`; }
+      sql += filterSql;
       sql += ' ORDER BY p.created_at DESC';
       rows = (await query(sql, params)).rows;
     }
