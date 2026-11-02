@@ -256,7 +256,7 @@ describe('N+1 budget: GET /api/projects/:id/milestones', () => {
 describe('N+1 budget: GET /api/dashboard', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('dashboard fetches everything in at most 3 queries', async () => {
+  it('dashboard fetches everything in at most 5 queries', async () => {
     let callIndex = 0;
     query.mockImplementation(() => {
       callIndex++;
@@ -271,7 +271,7 @@ describe('N+1 budget: GET /api/dashboard', () => {
       .set('x-test-person', JSON.stringify({ id: 'admin-id', name: 'Admin', email: 'admin@test.com', role: 'admin' }));
 
     expect([200, 404]).toContain(res.status);
-    expect(callIndex).toBeLessThanOrEqual(3);
+    expect(callIndex).toBeLessThanOrEqual(5);
   });
 
   it('dashboard query count is independent of number of projects', async () => {
@@ -585,7 +585,7 @@ describe('General query budget invariants', () => {
     const adminCount   = await countFor('admin');
     const partnerCount = await countFor('partner_poc');
     // Both should use bounded queries; difference is acceptable but should not be enormous
-    expect(adminCount).toBeLessThanOrEqual(3);
-    expect(partnerCount).toBeLessThanOrEqual(3);
+    expect(adminCount).toBeLessThanOrEqual(5);
+    expect(partnerCount).toBeLessThanOrEqual(5);
   });
 });

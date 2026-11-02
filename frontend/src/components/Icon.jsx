@@ -10,6 +10,7 @@ const PATHS = {
   chevronLeft: <path d="m15 18-6-6 6-6" />,
   chevronRight: <path d="m9 18 6-6-6-6" />,
   chevronDown: <path d="m6 9 6 6 6-6" />,
+  download: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m7 10 5 5 5-5" /><path d="M12 15V3" /></>,
   chevronsUpDown: <><path d="m7 15 5 5 5-5" /><path d="m7 9 5-5 5 5" /></>,
   arrowUp: <><path d="m5 12 7-7 7 7" /><path d="M12 19V5" /></>,
   arrowDown: <><path d="M12 5v14" /><path d="m19 12-7 7-7-7" /></>,

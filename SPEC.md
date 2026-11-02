@@ -73,47 +73,41 @@ The sign-in, forgot-password and reset-password pages share a branded layout: a 
 | Deep links               | Work and survive refresh                                                                                       | All users  |
 | Role guards              | Redirect unauthorised users instead of showing an empty page                                                   | All users  |
 
-## 5. Dashboard (Landing Page)
+## 5. Dashboard (Landing Page): Delivery Overview
 
-The first page after sign-in. The role decides the view, the server scopes every figure in SQL, and the endpoint (`GET /api/dashboard`) takes no parameters, so a Partner POC cannot request another partner's data. Three queries serve both roles. Every card is a keyboard-accessible link to the projects list pre-filtered to the matching projects (a dismissible "Showing: …" chip sits above the list); Total Milestones has no destination. Two slim proportion bars (no numbers of their own) show the milestone outcome and approval mix. Colours are colour-blind-safe.
+The first page after sign-in. The role decides the view, and the server scopes every figure in SQL. `GET /api/dashboard?range=all|quarter|month&partner=<id>` uses 5 queries for an admin and 4 for a Partner POC. The `partner` filter only narrows an admin's view and is ignored for a Partner POC, so scope can never be widened or redirected from the request.
 
-### Admin view (all projects)
+### Header and controls
 
-| Section              | Card                         | Definition                                                                                              |
-| -------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Portfolio snapshot   | Total projects               | All non-deleted projects                                                                                |
-|                      | Not started / In progress / Completed | Mutually exclusive project status counts                                                       |
-|                      | Completed on time            | Completed projects whose delivery date is on or before the approved end date                            |
-|                      | Completed with delay         | Completed projects whose delivery date is after the approved end date                                   |
-| Delivery performance | Total milestones             | Every milestone, extended milestones included                                                           |
-|                      | Completed on time            | Completed milestones recorded as on time                                                                |
-|                      | Delayed: company side        | Completed milestones recorded as delayed with the Company as the responsible side                       |
-|                      | Delayed: partner side        | Completed milestones recorded as delayed with the Partner as the responsible side                       |
-| Approval & delay     | Submitted for approval       | Approval state is pending                                                                               |
-|                      | Approved                     | Approved by the Partner POC (not an override)                                                           |
-|                      | Declined                     | Currently denied; a denied milestone that is later approved is not counted here                         |
-|                      | Approved by override         | Approved through Admin Override & Approve; never also counted as a partner approval                     |
+| Control            | Behaviour                                                                                                                          |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Title and subtitle | "Delivery overview" with "Portfolio health across N projects and M milestones · Updated <time>"                                    |
+| Time range         | All time, This quarter, This month (calendar periods). Limits completed-milestone and approval figures to activity in the period; the pipeline and open work stay current |
+| Partner (admin)    | All partners, or one Partner POC; shows only the projects that person is POC on                                                    |
+| Export report      | Downloads a CSV of the figures on screen (range, partner, metrics, needs-attention rows); cells that could run as spreadsheet formulas are neutralised |
+| URL                | Range and partner live in the address, so a view can be shared and survives refresh                                                |
 
-### Partner POC view (only projects where they are the POC; no company-side or admin-only figures)
+### Cards (all rows and chips link to the projects list filtered to the matching projects)
 
-| Section           | Card                           | Definition                                                                               |
-| ----------------- | ------------------------------ | ---------------------------------------------------------------------------------------- |
-| Portfolio         | Assigned projects              | Projects where the signed-in person is the POC                                           |
-|                   | Active projects                | Assigned projects in progress                                                            |
-|                   | Awaiting my approval           | Pending approvals on assigned projects (any POC on a project can decide)                 |
-|                   | Completed on time              | Completed milestones recorded as on time across assigned projects                        |
-|                   | Delayed milestones             | Completed milestones recorded as delayed (either side) across assigned projects          |
-| Delivery overview | Projects delivered on time / with delay | Completed assigned projects against their approved end date                     |
+| Card               | Content                                                                                                                                                                                  |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| On-time delivery   | Donut with the percentage of completed milestones finished on time; legend: Completed on time, Delayed (partner side), Delayed (company side); a plain-language note on who owned the delays. A Partner POC sees one combined "Delayed" figure |
+| Project pipeline   | One segment per project coloured by status, plus Not started, In progress (with % of portfolio) and Completed (with "n on time" / "n delayed" chips); "View all projects" link          |
+| Milestone status   | Total milestones in view (extended included), a proportion bar and a table of Completed on time, Delayed (partner / company side) and Not yet completed with counts and share           |
+| Approvals          | "n of N approved" with bars: Approved by Partner POC, Approved by admin override, Awaiting partner, Declined (partners see Approved, Awaiting my approval, Declined)                     |
+| Needs attention    | Admin: declined and awaiting approvals plus admin overrides from the last 30 days, with milestone, project, status, owner and an action (Review, Open, View note). Partner: milestones awaiting their approval. A count pill and an "Open approvals queue" link |
 
 ### Calculation rules
 
-| Rule                | Detail                                                                                                                                                                    |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Delivery date       | Projects have no completion-date column, so a completed project's delivery date is the date its last milestone was completed (the same basis as Completion Tracking)       |
-| Not classified      | A completed project with no approved end date or no milestones is neither on time nor delayed; the dashboard says how many were left out                                  |
-| Delay responsibility | Taken from the side recorded when the milestone was completed; never inferred from dates                                                                                |
-| Approval state      | Counted from the current state of each approval, so each milestone is counted once; history of earlier denials or resubmissions is ignored                                |
-| States              | Loading skeleton, error message, and a clear empty state when there are no projects (or none assigned); zero values show as 0                                              |
+| Rule                 | Detail                                                                                                                                                                  |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Delivery date        | Projects have no completion-date column, so a completed project's delivery date is the date its last milestone was completed (the same basis as Completion Tracking)       |
+| On time or delayed   | A completed project is compared with its approved end date; one with no approved end date or no milestones is "not classified" and the dashboard says how many were left out |
+| Milestone delays     | Taken from the on-time flag and the delay side recorded at completion; never inferred from dates                                                                        |
+| Approval state       | Counted from the current state of each approval, so each milestone is counted once; an override is never also a partner approval, and a denied-then-approved milestone is approved |
+| Time range           | Completed milestones are filtered by completion date and approvals by their last state change; "Not yet completed", the pipeline and Needs attention are always current    |
+| Partner confidentiality | A Partner POC gets no company-side figures, no override figures, no owner names and no partner list                                                                  |
+| States               | Loading, error, a clear message if the server returns an older data format, and an empty state when there are no projects; zero values show as 0                        |
 
 ## 6. Projects
 
@@ -371,7 +365,7 @@ Also deferred: the outbox, delivery worker, retry and dedupe mechanism, and the 
 | GET /api/health         | Unauthenticated | Shallow health check                                           |
 | GET /api/ready          | Admin           | Database status                                                |
 | GET /api/me/pending     | Signed in       | Pending-action entries for the notification indicator          |
-| GET /api/dashboard      | Signed in       | Role-based landing-dashboard figures (no parameters)           |
+| GET /api/dashboard      | Signed in       | Role-based delivery overview (range and, for admins, partner filter) |
 | POST /api/internal/cron | Shared secret   | Sweeps unclaimed uploads, prunes rate limits and audit records |
 
 | Script                | Purpose                              |
@@ -391,7 +385,7 @@ Deployment: the API and the static frontend deploy to Render from the `main` bra
 | Three server-side authorisation layers | Identity (guards.js), then scope as SQL so out-of-scope rows return 404 (scope.js), then the state machine (rules.js); client-side rule copies exist only to explain why a button is disabled |
 | Irreversible actions confirm twice     | Completing a project requires typing the project code; deleting one requires a written reason                                                                                                 |
 | Flat reads                             | One query per table for a whole result set rather than a query per row                                                                                                                        |
-| Automated testing                      | Six suites: schema, API, concurrency, N+1 query budget, dashboard (authorisation, filters, and metric definitions checked against real rows inside a rolled-back transaction) and frontend in a real browser. The newest approval, conversation, extended-milestone and notification features do not yet have dedicated tests. Five schema checks fail because they expect columns the schema never had (projects.start_date, milestones.due_date, attachments.project_id) |
+| Automated testing                      | Six suites: schema, API, concurrency, N+1 query budget, dashboard (authorisation, range and partner filters, drill-down filters, and metric definitions checked against real rows inside a rolled-back transaction) and frontend in a real browser. The newest approval, conversation, extended-milestone and notification features do not yet have dedicated tests. Five schema checks fail because they expect columns the schema never had (projects.start_date, milestones.due_date, attachments.project_id) |
 
 ## 19. Known Limitations
 
